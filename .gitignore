@@ -1,0 +1,38 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local database / index artifacts
+*.db
+*.sqlite3
+data/*.index
+data/*.npy
+
+# Runtime/generated folders
+temp_audio/
+results/
+
+# IDE / OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Etc.
+docs/
