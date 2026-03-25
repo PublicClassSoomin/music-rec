@@ -41,6 +41,7 @@ from tqdm import tqdm
 
 from data.database import init_db, upsert_song, upsert_audio_features, get_all_songs
 
+# 크롤링 헤더 설정
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -52,6 +53,9 @@ HEADERS = {
 
 
 class _YtdlpQuietLogger:
+    '''
+        유튜브 다운로드 라이브러리(yt-dlp)가 출력하는 불필요한 로그(debug, warning, error)를 무시하여 터미널을 깔끔하게 유지하는 로거 클래스
+    '''
     def debug(self, msg):
         return
 
@@ -61,9 +65,11 @@ class _YtdlpQuietLogger:
     def error(self, msg):
         return
 
-
 def _fetch(url: str, referer: str | None = None) -> str | None:
     h = {**HEADERS}
+    '''
+        멜론 서버에 봇(Bot)이 아닌 척 위장(Headers)하여 접속하고, 해당 URL의 HTML 텍스트를 반환하는 함수
+    '''
     if referer:
         h["Referer"] = referer
     try:
@@ -76,6 +82,10 @@ def _fetch(url: str, referer: str | None = None) -> str | None:
 
 
 def _parse_tracks_from_chart_soup(soup: BeautifulSoup, max_results: int) -> list[dict]:
+    '''
+        차트 HTML에서 곡 제목과 가수명을 파싱하여 노래들을 리스트로 반환하는 함수
+        [범위 : HTML 1 파일]
+    '''
     songs: list[dict] = []
     rows = soup.select("tr.lst50, tr.lst100")
     for row in rows[:max_results]:
@@ -96,6 +106,10 @@ def _parse_tracks_from_chart_soup(soup: BeautifulSoup, max_results: int) -> list
 
 
 def scrape_chart_url(url: str, max_results: int) -> list[dict]:
+    '''
+        URL에서 max_results 만큼 노래들을 수집하여 리스트로 반환하는 함수
+        [범위 : HTML 1 파일]
+    '''
     html = _fetch(url)
     if not html:
         return []
@@ -104,7 +118,12 @@ def scrape_chart_url(url: str, max_results: int) -> list[dict]:
 
 
 def _parse_tracks_from_genre_html(html: str, max_results: int) -> list[dict]:
-    soup = BeautifulSoup(html, "html.parser")
+    '''
+        장르 HTML에서 곡 제목, 가수명을 파싱하여 노래들을 리스트로 반환하는 함수
+        [범위 : HTML 1 파일]
+    '''
+    # BeautifulSoup으로 HTML을 요리하기 좋게 만듭니다.
+    soup = BeautifulSoup(html, "html.parser") 
     songs: list[dict] = []
     for wrap in soup.select("div.wrap_song_info"):
         t_el = wrap.select_one(".rank01 a")
@@ -121,7 +140,11 @@ def _parse_tracks_from_genre_html(html: str, max_results: int) -> list[dict]:
 
 
 def scrape_genre_code(gnr_code: str, max_total: int) -> list[dict]:
-    """genre/song_listPaging.htm — pageIndex 1, 51, 101, … (50곡/페이지)."""
+    """
+        genre/song_listPaging.htm — pageIndex 1, 51, 101, … (50곡/페이지).
+        멜론 장르 페이지에서 페이지를 넘기며 곡을 수집하는 함수
+        [범위 : HTML 여러 파일]
+    """
     ref = f"https://www.melon.com/genre/song_list.htm?gnrCode={gnr_code}"
     all_songs: list[dict] = []
     page_index = 1
@@ -150,14 +173,19 @@ def scrape_extra_page(url: str, max_results: int = 500) -> list[dict]:
     """
     플레이리스트 등 추가 URL.
     차트(tr.lst50) 또는 장르형(wrap_song_info + rank01/rank02) HTML이면 파싱.
+    [범위 : HTML 1 파일]
     """
     html = _fetch(url, referer="https://www.melon.com")
     if not html:
         return []
+    
+    # 리스트의 각행을 제목과 작곡가로 하여 반환
     if "lst50" in html or "lst100" in html:
         soup = BeautifulSoup(html, "html.parser")
         rows = _parse_tracks_from_chart_soup(soup, max_results)
         return [{"title": r["title"], "artist": r["artist"]} for r in rows]
+    
+
     if "wrap_song_info" in html and "rank01" in html:
         return _parse_tracks_from_genre_html(html, max_results)
     print(f"  ⚠️ 파싱 불가 (JS 렌더 전용·오류 페이지일 수 있음): {url[:80]}…")
@@ -165,6 +193,9 @@ def scrape_extra_page(url: str, max_results: int = 500) -> list[dict]:
 
 
 def dedupe_tracks(tracks: list[dict]) -> list[dict]:
+    '''
+        수집된 곡 리스트에서 대소문자를 구분하지 않고 '제목+가수'를 기준으로 중복된 곡을 제거
+    '''
     seen: set[tuple[str, str]] = set()
     out: list[dict] = []
     for t in tracks:
@@ -181,6 +212,9 @@ def dedupe_tracks(tracks: list[dict]) -> list[dict]:
 
 
 def gather_all_melon_tracks() -> list[dict]:
+    '''
+        설정(config.py)에 등록된 모든 차트와 장르 소스를 순회하며 곡을 긁어모은 뒤, 중복을 제거하여 최종 크롤링 리스트를 반환하는 총괄 매니저 함수
+    '''
     from utils.config import (
         MELON_CHART_URLS,
         MELON_MAX_SONGS_PER_CHART,
