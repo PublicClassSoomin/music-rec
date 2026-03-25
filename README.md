@@ -43,6 +43,10 @@ pip install -U pip setuptools wheel
 pip install -r requirements.txt
 ```
 
+# 실행 순서
+
+# 1. 환경 설정
+
 ```bash
 cd music-rec
 python -m venv .venv
@@ -50,6 +54,19 @@ source .venv/Scripts/activate
 python -m pip install -U pip setuptools wheel
 pip install -r requirements.txt
 python -m pip install "setuptools<82"
+```
+
+# 2. ffmpeg 설치
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+choco install ffmpeg -y
+```
+
+# 3. 음악 수집 (venv에서)
+
+```bash
+python data/melon_pipeline.py
 ```
 
 > 참고: `scikit-surprise`는 일부 macOS 환경에서 빌드 이슈가 있어 기본 의존성에서 분리되어 있습니다. 필요 시에만 수동 설치하세요.

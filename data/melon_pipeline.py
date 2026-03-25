@@ -194,7 +194,7 @@ def scrape_extra_page(url: str, max_results: int = 500) -> list[dict]:
 
 def dedupe_tracks(tracks: list[dict]) -> list[dict]:
     '''
-        수집된 곡 리스트에서 대소문자를 구분하지 않고 '제목+가수'를 기준으로 중복된 곡을 제거
+        수집된 곡 리스트에서 대소문자를 구분하지 않고 '제목+가수'를 기준으로 중복된 곡을 제거하고 중복되지 않은 제목과 가수를 같은 행으로 하여 리스트를 반환
     '''
     seen: set[tuple[str, str]] = set()
     out: list[dict] = []
