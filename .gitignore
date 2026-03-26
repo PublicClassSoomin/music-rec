@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+winget
 
 # Python cache/build artifacts
 __pycache__/

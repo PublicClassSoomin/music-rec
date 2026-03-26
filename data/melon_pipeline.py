@@ -323,7 +323,11 @@ def extract_features(audio_path: str, duration: float = 30.0) -> dict | None:
 
 
 def run():
+    '''
+    멜론 차트·장르·추가 URL에서 곡 목록 수집 → YouTube 매칭 + 다운로드 + 특성 추출 → DB 저장
+    '''
     if not _check_ffmpeg():
+        print("❌ ffmpeg/ffprobe 미설치. 설치 후 다시 실행하세요.")
         return
 
     init_db()

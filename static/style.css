@@ -1,24 +1,30 @@
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
 :root {
-  --bg:        #0a0a0a;
-  --surface:   #121212;
-  --surface2:  #1c1c1c;
-  --surface3:  #282828;
-  --accent:    #1db954;
-  --accent-h:  #1ed760;
-  --text:      #ffffff;
-  --text-sub:  #b3b3b3;
-  --text-muted:#6a6a6a;
-  --radius:    8px;
+  --bg: #0a0a0a;
+  --surface: #121212;
+  --surface2: #1c1c1c;
+  --surface3: #282828;
+  --accent: #1db954;
+  --accent-h: #1ed760;
+  --text: #ffffff;
+  --text-sub: #b3b3b3;
+  --text-muted: #6a6a6a;
+  --radius: 8px;
   --sidebar-w: 240px;
-  --player-h:  80px;
+  --player-h: 80px;
 }
 
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: 'DM Sans', sans-serif;
+  font-family: "DM Sans", sans-serif;
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   grid-template-rows: 1fr var(--player-h);
@@ -26,8 +32,12 @@ body {
   overflow: hidden;
 }
 
-#app-shell { display: contents; }
-#app-shell.hidden { display: none; }
+#app-shell {
+  display: contents;
+}
+#app-shell.hidden {
+  display: none;
+}
 
 .auth-gate {
   position: fixed;
@@ -38,7 +48,9 @@ body {
   justify-content: center;
   z-index: 2000;
 }
-.auth-gate.hidden { display: none; }
+.auth-gate.hidden {
+  display: none;
+}
 .auth-panel {
   width: 360px;
   background: #121212;
@@ -47,7 +59,9 @@ body {
   padding: 24px;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
 }
-.auth-panel h1 { margin-bottom: 8px; }
+.auth-panel h1 {
+  margin-bottom: 8px;
+}
 .auth-panel-sub {
   color: var(--text-sub);
   font-size: 0.9rem;
@@ -72,7 +86,11 @@ body {
   color: var(--accent);
 }
 
-.nav { display: flex; flex-direction: column; gap: 4px; }
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 .nav-item {
   padding: 10px 12px;
   border-radius: var(--radius);
@@ -80,12 +98,20 @@ body {
   cursor: pointer;
   font-size: 0.9rem;
   font-weight: 500;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s;
   text-decoration: none;
   display: block;
 }
-.nav-item:hover { color: var(--text); background: var(--surface3); }
-.nav-item.active { color: var(--text); font-weight: 700; }
+.nav-item:hover {
+  color: var(--text);
+  background: var(--surface3);
+}
+.nav-item.active {
+  color: var(--text);
+  font-weight: 700;
+}
 
 .sidebar-label {
   font-size: 0.72rem;
@@ -113,19 +139,32 @@ body {
   line-height: 1.45;
   color: var(--text-muted);
 }
-.algo-hint.hidden { display: none; }
+.algo-hint.hidden {
+  display: none;
+}
 
-.genre-list { display: flex; flex-direction: column; gap: 4px; }
+.genre-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 .genre-item {
   padding: 6px 10px;
   border-radius: 4px;
   font-size: 0.85rem;
   color: var(--text-sub);
   cursor: pointer;
-  transition: color 0.1s, background 0.1s;
+  transition:
+    color 0.1s,
+    background 0.1s;
 }
-.genre-item:hover { color: var(--text); background: var(--surface3); }
-.genre-item.active { color: var(--accent); }
+.genre-item:hover {
+  color: var(--text);
+  background: var(--surface3);
+}
+.genre-item.active {
+  color: var(--accent);
+}
 
 .username-input {
   width: 100%;
@@ -199,8 +238,12 @@ body {
   padding: 32px 24px 24px;
 }
 
-.view { display: none; }
-.view.active { display: block; }
+.view {
+  display: none;
+}
+.view.active {
+  display: block;
+}
 
 .section-title {
   font-size: 1.5rem;
@@ -230,7 +273,12 @@ body {
   font-weight: 800;
   letter-spacing: -0.03em;
   margin-bottom: 10px;
-  background: linear-gradient(135deg, #fff 0%, #b8e6c8 45%, var(--accent-h) 100%);
+  background: linear-gradient(
+    135deg,
+    #fff 0%,
+    #b8e6c8 45%,
+    var(--accent-h) 100%
+  );
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -309,7 +357,10 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 16px;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s;
 }
 .featured-three .song-card:hover {
   transform: translateY(-4px);
@@ -349,7 +400,11 @@ body {
 }
 
 /* ── 검색 ──────────────────────────────────────────────── */
-.search-bar { display: flex; gap: 10px; margin-bottom: 24px; }
+.search-bar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 24px;
+}
 .search-bar--hero {
   max-width: 560px;
   margin: 16px auto 0;
@@ -363,7 +418,9 @@ body {
   color: var(--text);
   font-size: 0.95rem;
 }
-.search-bar input:focus { outline: 2px solid var(--accent); }
+.search-bar input:focus {
+  outline: 2px solid var(--accent);
+}
 .search-bar button {
   padding: 12px 20px;
   background: var(--accent);
@@ -374,7 +431,9 @@ body {
   cursor: pointer;
   transition: background 0.15s;
 }
-.search-bar button:hover { background: var(--accent-h); }
+.search-bar button:hover {
+  background: var(--accent-h);
+}
 
 /* ── 그리드 ────────────────────────────────────────────── */
 .song-grid {
@@ -385,7 +444,10 @@ body {
 #liked-list.song-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
-.placeholder { color: var(--text-muted); font-size: 0.9rem; }
+.placeholder {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
 
 /* ── 카드 ──────────────────────────────────────────────── */
 .song-card {
@@ -396,7 +458,9 @@ body {
   transition: background 0.15s;
   position: relative;
 }
-.song-card:hover { background: var(--surface3); }
+.song-card:hover {
+  background: var(--surface3);
+}
 
 .card-thumb-wrap {
   position: relative;
@@ -406,12 +470,18 @@ body {
   margin-bottom: 12px;
   background: #333;
 }
-.card-thumb { width: 100%; height: 100%; object-fit: cover; }
+.card-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 
 .btn-play-overlay {
   position: absolute;
-  bottom: 8px; right: 8px;
-  width: 40px; height: 40px;
+  bottom: 8px;
+  right: 8px;
+  width: 40px;
+  height: 40px;
   background: var(--accent);
   border: none;
   border-radius: 50%;
@@ -420,15 +490,23 @@ body {
   cursor: pointer;
   opacity: 0;
   transform: translateY(4px);
-  transition: opacity 0.2s, transform 0.2s;
-  display: flex; align-items: center; justify-content: center;
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.song-card:hover .btn-play-overlay { opacity: 1; transform: translateY(0); }
+.song-card:hover .btn-play-overlay {
+  opacity: 1;
+  transform: translateY(0);
+}
 
 .score-badge {
   position: absolute;
-  top: 6px; left: 6px;
-  background: rgba(0,0,0,0.75);
+  top: 6px;
+  left: 6px;
+  background: rgba(0, 0, 0, 0.75);
   color: var(--accent);
   font-size: 0.7rem;
   padding: 2px 6px;
@@ -466,10 +544,16 @@ body {
   color: var(--text-sub);
   cursor: pointer;
   font-size: 0.85rem;
-  transition: color 0.1s, background 0.1s;
+  transition:
+    color 0.1s,
+    background 0.1s;
 }
-.btn-like:hover { color: var(--accent); }
-.btn-skip:hover { color: #e74c3c; }
+.btn-like:hover {
+  color: var(--accent);
+}
+.btn-skip:hover {
+  color: #e74c3c;
+}
 
 /* ── 플레이어 ───────────────────────────────────────────── */
 .player {
@@ -483,7 +567,11 @@ body {
   height: var(--player-h);
 }
 
-.player-info { display: flex; align-items: center; gap: 12px; }
+.player-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .player-thumb-wrap {
   width: 52px;
   height: 52px;
@@ -494,7 +582,8 @@ body {
   flex-shrink: 0;
 }
 .player-info img {
-  width: 52px; height: 52px;
+  width: 52px;
+  height: 52px;
   border-radius: 4px;
   object-fit: cover;
   background: #333;
@@ -509,9 +598,17 @@ body {
   background: #2b2b2b;
   color: #d1d1d1;
 }
-.player-thumb-fallback.hidden { display: none; }
-#player-title { font-size: 0.9rem; font-weight: 600; }
-.player-artist { font-size: 0.78rem; color: var(--text-sub); }
+.player-thumb-fallback.hidden {
+  display: none;
+}
+#player-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.player-artist {
+  font-size: 0.78rem;
+  color: var(--text-sub);
+}
 
 .btn-icon {
   background: none;
@@ -521,9 +618,15 @@ body {
   cursor: pointer;
   transition: color 0.15s;
 }
-.btn-icon:hover, .btn-icon.liked { color: var(--accent); }
+.btn-icon:hover,
+.btn-icon.liked {
+  color: var(--accent);
+}
 
-.player-controls { display: flex; justify-content: center; }
+.player-controls {
+  display: flex;
+  justify-content: center;
+}
 .btn-youtube {
   padding: 10px 24px;
   background: var(--accent);
@@ -533,12 +636,23 @@ body {
   font-weight: 700;
   font-size: 0.9rem;
   cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
+  transition:
+    background 0.15s,
+    transform 0.1s;
 }
-.btn-youtube:hover:not(:disabled) { background: var(--accent-h); transform: scale(1.03); }
-.btn-youtube:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-youtube:hover:not(:disabled) {
+  background: var(--accent-h);
+  transform: scale(1.03);
+}
+.btn-youtube:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 
-.player-right { display: flex; justify-content: flex-end; }
+.player-right {
+  display: flex;
+  justify-content: flex-end;
+}
 .algo-badge {
   font-size: 0.72rem;
   color: var(--text-muted);
@@ -548,6 +662,151 @@ body {
 }
 
 /* 스크롤바 */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 3px;
+}
+
+/* ── 완벽 복제본: Vibe-Sync AI DJ MIXING CONSOLE ── */
+#vibe-console {
+  background: #1a1a1a;
+  border: 1px solid rgba(30, 215, 96, 0.4);
+  border-radius: 12px;
+  padding: 24px 30px;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto 40px auto;
+  box-shadow:
+    0 0 25px rgba(30, 215, 96, 0.15),
+    inset 0 0 10px rgba(30, 215, 96, 0.05);
+}
+
+/* 헤더 & 토글 스위치 */
+.vibe-console-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+.vibe-console-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.5px;
+}
+.vibe-toggle-wrap {
+  cursor: pointer;
+}
+.vibe-toggle-wrap input {
+  display: none;
+}
+.vibe-toggle-pill {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 150px;
+  height: 38px;
+  border: 1px solid #1ed760;
+  border-radius: 20px;
+  padding: 0 6px;
+  box-shadow: 0 0 12px rgba(30, 215, 96, 0.3);
+  transition: 0.3s;
+}
+.vibe-toggle-text {
+  position: absolute;
+  left: 14px;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.vibe-toggle-text strong {
+  color: #1ed760;
+}
+.vibe-toggle-circle {
+  width: 24px;
+  height: 24px;
+  background: #1ed760;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #1ed760;
+  transform: translateX(108px);
+  transition: 0.3s;
+}
+
+/* 토글 OFF 상태 */
+.vibe-toggle-wrap input:not(:checked) + .vibe-toggle-pill {
+  border-color: #555;
+  box-shadow: none;
+}
+.vibe-toggle-wrap input:not(:checked) + .vibe-toggle-pill .vibe-toggle-text {
+  left: 40px;
+}
+.vibe-toggle-wrap
+  input:not(:checked)
+  + .vibe-toggle-pill
+  .vibe-toggle-text
+  strong {
+  color: #888;
+}
+.vibe-toggle-wrap input:not(:checked) + .vibe-toggle-pill .vibe-toggle-circle {
+  background: #555;
+  box-shadow: none;
+  transform: translateX(0);
+}
+
+/* 3x2 그리드 배열 */
+.vibe-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 30px 40px;
+}
+.vibe-item {
+  display: flex;
+  flex-direction: column;
+}
+.vibe-label {
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+/* 커스텀 네온 슬라이더 (좌측 채우기 효과 포함) */
+input[type="range"].vibe-slider {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    #1ed760 var(--val, 50%),
+    #000 var(--val, 50%)
+  );
+  outline: none;
+  margin: 8px 0;
+}
+input[type="range"].vibe-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 26px; /* 세로로 긴 알약 모양 썸 */
+  border-radius: 4px;
+  background: #1ed760;
+  cursor: pointer;
+}
+input[type="range"].vibe-slider:disabled {
+  opacity: 0.4;
+}
+
+.vibe-emojis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: #a0a0a0;
+  margin-top: 6px;
+}

@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta, timezone
 import jwt
 from data.database import (
@@ -49,6 +50,10 @@ async def startup():
     # from algorithms.my_algo import MyRecommender
     # recommenders["my_algo"] = MyRecommender(faiss_index)
     # recommenders["my_algo"].fit(song_df)
+    from algorithms.vibe_sync import VibeSyncRecommender
+    recommenders["vibe_sync"] = VibeSyncRecommender()
+    recommenders["vibe_sync"].fit(song_df)
+    print("[API] 샘플 알고리즘 등록: vibe_sync")
     # ────────────────────────────────────────────────────────────────
 
 
@@ -87,7 +92,7 @@ class RecommendRequest(BaseModel):
     song_id:   str
     algorithm: str = "default"
     top_k:     int = 10
-
+    params: Optional[Dict[str, Any]] = None
 
 class UserRecommendRequest(BaseModel):
     username:  str
@@ -171,7 +176,10 @@ def recommend_by_song(req: RecommendRequest):
             status_code=400,
             detail=f"알고리즘 '{req.algorithm}' 없음. 사용 가능: {list(recommenders.keys())}",
         )
-    rec_dict = recommenders[req.algorithm].recommend(req.song_id, req.top_k)
+    if req.algorithm == "vibe_sync":
+         rec_dict = recommenders[req.algorithm].recommend(req.song_id, req.top_k, params=req.params)
+    else:
+         rec_dict = recommenders[req.algorithm].recommend(req.song_id, req.top_k)
     return _format(rec_dict, req.algorithm)
 
 

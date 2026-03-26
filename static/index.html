@@ -1,139 +1,272 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>🎵 MusicRec</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Circular+Std:wght@400;700&family=DM+Sans:wght@300;400;500;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css" />
-</head>
-<body>
-  <div id="auth-gate" class="auth-gate">
-    <div class="auth-panel">
-      <h1>🎵 MusicRec</h1>
-      <p class="auth-panel-sub">로그인 후 서비스를 이용할 수 있어요.</p>
-      <input id="auth-username" class="username-input" type="text" placeholder="아이디" />
-      <input id="auth-password" class="username-input" type="password" placeholder="비밀번호" />
-      <div class="auth-buttons">
-        <button id="gate-signup-btn" class="auth-btn">회원가입</button>
-        <button id="gate-login-btn" class="auth-btn">로그인</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="app-shell">
-  <!-- 사이드바 -->
-  <aside class="sidebar">
-    <div class="logo">🎵 MusicRec</div>
-
-    <nav class="nav">
-      <a class="nav-item active" data-view="home">홈</a>
-      <a class="nav-item" data-view="liked">좋아요한 곡</a>
-    </nav>
-
-    <div class="sidebar-section">
-      <p class="sidebar-label">알고리즘</p>
-      <select id="algo-select" class="algo-select">
-        <option value="">선택 안 됨</option>
-      </select>
-      <p id="algo-hint" class="algo-hint hidden" role="status"></p>
-    </div>
-
-    <div class="sidebar-section">
-      <p class="sidebar-label">장르</p>
-      <div id="genre-list" class="genre-list"></div>
-    </div>
-
-    <div class="sidebar-section user-section">
-      <p class="sidebar-label">유저</p>
-      <p id="auth-status" class="auth-status">비로그인 상태</p>
-      <div class="auth-buttons single">
-        <button id="logout-btn" class="auth-btn ghost">로그아웃</button>
-      </div>
-    </div>
-  </aside>
-
-  <!-- 메인 -->
-  <main class="main">
-
-    <!-- 홈 뷰 -->
-    <section id="view-home" class="view active">
-      <header class="featured-hero">
-        <h2 class="featured-title">추천 음악</h2>
-        <p class="featured-sub">곡을 고르거나, 아래에서 분위기로 검색해 보세요</p>
-        <div class="home-actions">
-          <button id="user-reco-btn" class="auth-btn auth-btn--hero">내 취향 추천 받기</button>
-        </div>
-        <div class="search-bar search-bar--hero search-bar--home">
-          <input id="search-input" type="text" placeholder="'새벽에 공부할 때 듣기 좋은 음악' 처럼 입력해보세요" />
-          <button id="search-btn">검색</button>
-        </div>
-      </header>
-      <div class="featured-stage featured-stage--stack">
-        <div id="song-grid" class="featured-three">
-          <p class="placeholder">곡을 클릭하거나 검색해서 추천을 받아보세요.</p>
-        </div>
-        <div id="search-results-block" class="search-results-block" hidden>
-          <h3 class="subsection-title">검색 결과</h3>
-          <div id="search-result" class="featured-three"></div>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🎵 MusicRec</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Circular+Std:wght@400;700&family=DM+Sans:wght@300;400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div id="auth-gate" class="auth-gate">
+      <div class="auth-panel">
+        <h1>🎵 MusicRec</h1>
+        <p class="auth-panel-sub">로그인 후 서비스를 이용할 수 있어요.</p>
+        <input
+          id="auth-username"
+          class="username-input"
+          type="text"
+          placeholder="아이디"
+        />
+        <input
+          id="auth-password"
+          class="username-input"
+          type="password"
+          placeholder="비밀번호"
+        />
+        <div class="auth-buttons">
+          <button id="gate-signup-btn" class="auth-btn">회원가입</button>
+          <button id="gate-login-btn" class="auth-btn">로그인</button>
         </div>
       </div>
-    </section>
-
-    <!-- 좋아요 뷰 -->
-    <section id="view-liked" class="view">
-      <h2 class="section-title">좋아요한 곡</h2>
-      <div id="liked-list" class="song-grid"></div>
-    </section>
-
-  </main>
-
-  <!-- 하단 플레이어 -->
-  <footer class="player">
-    <div class="player-info">
-      <div class="player-thumb-wrap">
-        <img id="player-thumb" src="" alt="" />
-        <div id="player-thumb-fallback" class="player-thumb-fallback">💿</div>
-      </div>
-      <div class="player-meta">
-        <p id="player-title">재생 중인 곡 없음</p>
-        <p id="player-artist" class="player-artist"></p>
-      </div>
-      <button id="btn-like-player" class="btn-icon">🤍</button>
     </div>
 
-    <div class="player-controls">
-      <button id="btn-youtube" class="btn-youtube" disabled>
-        ▶ YouTube에서 듣기
-      </button>
-    </div>
+    <div id="app-shell">
+      <!-- 사이드바 -->
+      <aside class="sidebar">
+        <div class="logo">🎵 MusicRec</div>
 
-    <div class="player-right">
-      <span id="algo-badge" class="algo-badge"></span>
-    </div>
-  </footer>
+        <nav class="nav">
+          <a class="nav-item active" data-view="home">홈</a>
+          <a class="nav-item" data-view="liked">좋아요한 곡</a>
+        </nav>
 
-  <!-- 카드 템플릿 -->
-  <template id="song-card-tpl">
-    <div class="song-card">
-      <div class="card-thumb-wrap">
-        <img class="card-thumb" src="" alt="" />
-        <button class="btn-play-overlay">▶</button>
-        <span class="score-badge"></span>
-      </div>
-      <div class="card-info">
-        <p class="card-title"></p>
-        <p class="card-artist"></p>
-      </div>
-      <div class="card-actions">
-        <button class="btn-like">🤍</button>
-        <button class="btn-skip">⨉</button>
-      </div>
-    </div>
-  </template>
+        <div class="sidebar-section">
+          <p class="sidebar-label">알고리즘</p>
+          <select id="algo-select" class="algo-select">
+            <option value="">선택 안 됨</option>
+          </select>
+          <p id="algo-hint" class="algo-hint hidden" role="status"></p>
+        </div>
 
-  <script src="/static/app.js"></script>
-  </div>
-</body>
+        <div class="sidebar-section">
+          <p class="sidebar-label">장르</p>
+          <div id="genre-list" class="genre-list"></div>
+        </div>
+
+        <div class="sidebar-section user-section">
+          <p class="sidebar-label">유저</p>
+          <p id="auth-status" class="auth-status">비로그인 상태</p>
+          <div class="auth-buttons single">
+            <button id="logout-btn" class="auth-btn ghost">로그아웃</button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- 메인 -->
+      <main class="main">
+        <!-- 홈 뷰 -->
+        <section id="view-home" class="view active">
+          <header class="featured-hero">
+            <h2 class="featured-title">추천 음악</h2>
+            <p class="featured-sub">
+              곡을 고르거나, 아래에서 분위기로 검색해 보세요
+            </p>
+            <div class="home-actions">
+              <button id="user-reco-btn" class="auth-btn auth-btn--hero">
+                내 취향 추천 받기
+              </button>
+            </div>
+            <div class="search-bar search-bar--hero search-bar--home">
+              <input
+                id="search-input"
+                type="text"
+                placeholder="'새벽에 공부할 때 듣기 좋은 음악' 처럼 입력해보세요"
+              />
+              <button id="search-btn">검색</button>
+            </div>
+          </header>
+
+          <div id="vibe-console" style="display: none">
+            <!-- 초기에는 무조건 숨김 -->
+            <div class="vibe-console-header">
+              <h3 class="vibe-console-title">Vibe-Sync AI DJ MIXING CONSOLE</h3>
+              <label class="vibe-toggle-wrap">
+                <input type="checkbox" id="vibe-toggle-chk" checked />
+                <div class="vibe-toggle-pill">
+                  <span class="vibe-toggle-text"
+                    >나만의 믹싱 <strong id="vibe-status-text">ON</strong></span
+                  >
+                  <div class="vibe-toggle-circle"></div>
+                </div>
+              </label>
+            </div>
+
+            <div class="vibe-grid">
+              <div class="vibe-item">
+                <div class="vibe-label">[가수 (Artist Affinity)]</div>
+                <input
+                  type="range"
+                  class="vibe-slider"
+                  id="param-artist"
+                  min="0"
+                  max="100"
+                  value="50"
+                  style="--val: 50%"
+                />
+                <div class="vibe-emojis">
+                  <span>😴 아는 가수</span><span>🥳 새로운 가수</span>
+                </div>
+              </div>
+              <div class="vibe-item">
+                <div class="vibe-label">[노래 분위기 (Mood)]</div>
+                <input
+                  type="range"
+                  class="vibe-slider"
+                  id="param-mood"
+                  min="0"
+                  max="100"
+                  value="50"
+                  style="--val: 50%"
+                />
+                <div class="vibe-emojis">
+                  <span>😴 차분함</span><span>🥳 강렬함</span>
+                </div>
+              </div>
+              <div class="vibe-item">
+                <div class="vibe-label">[장르 (Genre Strictness)]</div>
+                <input
+                  type="range"
+                  class="vibe-slider"
+                  id="param-genre"
+                  min="0"
+                  max="100"
+                  value="50"
+                  style="--val: 50%"
+                />
+                <div class="vibe-emojis">
+                  <span>😴 이 장르만</span><span>🥳 장르 파괴</span>
+                </div>
+              </div>
+              <div class="vibe-item">
+                <div class="vibe-label">[노래특성 (Audio Similarity)]</div>
+                <input
+                  type="range"
+                  class="vibe-slider"
+                  id="param-sim"
+                  min="0"
+                  max="100"
+                  value="50"
+                  style="--val: 50%"
+                />
+                <div class="vibe-emojis">
+                  <span>😴 음색 일치</span><span>🥳 느낌 일치</span>
+                </div>
+              </div>
+              <div class="vibe-item">
+                <div class="vibe-label">[나의 감정 (Emotion)]</div>
+                <input
+                  type="range"
+                  class="vibe-slider"
+                  id="param-emo"
+                  min="0"
+                  max="100"
+                  value="50"
+                  style="--val: 50%"
+                />
+                <div class="vibe-emojis">
+                  <span>😴 평소 취향</span><span>🥳 지금 기분</span>
+                </div>
+              </div>
+              <div class="vibe-item">
+                <div class="vibe-label">[모험의 정도 (Adventure)]</div>
+                <input
+                  type="range"
+                  class="vibe-slider"
+                  id="param-adv"
+                  min="0"
+                  max="100"
+                  value="50"
+                  style="--val: 50%"
+                />
+                <div class="vibe-emojis">
+                  <span>😴 안전</span><span>🥳 극한</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="featured-stage featured-stage--stack">
+            <div id="song-grid" class="featured-three">
+              <p class="placeholder">
+                곡을 클릭하거나 검색해서 추천을 받아보세요.
+              </p>
+            </div>
+            <div id="search-results-block" class="search-results-block" hidden>
+              <h3 class="subsection-title">검색 결과</h3>
+              <div id="search-result" class="featured-three"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 좋아요 뷰 -->
+        <section id="view-liked" class="view">
+          <h2 class="section-title">좋아요한 곡</h2>
+          <div id="liked-list" class="song-grid"></div>
+        </section>
+      </main>
+
+      <!-- 하단 플레이어 -->
+      <footer class="player">
+        <div class="player-info">
+          <div class="player-thumb-wrap">
+            <img id="player-thumb" src="" alt="" />
+            <div id="player-thumb-fallback" class="player-thumb-fallback">
+              💿
+            </div>
+          </div>
+          <div class="player-meta">
+            <p id="player-title">재생 중인 곡 없음</p>
+            <p id="player-artist" class="player-artist"></p>
+          </div>
+          <button id="btn-like-player" class="btn-icon">🤍</button>
+        </div>
+
+        <div class="player-controls">
+          <button id="btn-youtube" class="btn-youtube" disabled>
+            ▶ YouTube에서 듣기
+          </button>
+        </div>
+
+        <div class="player-right">
+          <span id="algo-badge" class="algo-badge"></span>
+        </div>
+      </footer>
+
+      <!-- 카드 템플릿 -->
+      <template id="song-card-tpl">
+        <div class="song-card">
+          <div class="card-thumb-wrap">
+            <img class="card-thumb" src="" alt="" />
+            <button class="btn-play-overlay">▶</button>
+            <span class="score-badge"></span>
+          </div>
+          <div class="card-info">
+            <p class="card-title"></p>
+            <p class="card-artist"></p>
+          </div>
+          <div class="card-actions">
+            <button class="btn-like">🤍</button>
+            <button class="btn-skip">⨉</button>
+          </div>
+        </div>
+      </template>
+
+      <script src="/static/app.js"></script>
+    </div>
+  </body>
 </html>
