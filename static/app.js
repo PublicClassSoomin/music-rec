@@ -6,6 +6,10 @@ let authToken     = null;
 let currentUser   = () => authUser?.username || "guest";
 let likedSongs    = new Set();
 let songCache     = new Map(); // song_id -> full song object
+let currentGenre  = null;
+let currentFeed   = [];
+let skippedSongs  = new Set();
+let currentFeedContext = { type: "catalog" };
 
 // ── 초기화 ────────────────────────────────────────────────
 
@@ -14,8 +18,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   await bootstrapAuth();
   setupNav();
   await loadAlgorithms();
-  await loadGenres();
-  await loadSongs();
+  await loadInitialCatalog();
 
   document.getElementById("search-btn").addEventListener("click", onSearch);
   document.getElementById("search-input").addEventListener("keydown", e => {
@@ -113,6 +116,7 @@ function onLogout() {
   authUser = null;
   authToken = null;
   likedSongs.clear();
+  skippedSongs.clear();
   localStorage.removeItem("auth_token");
   showAuthGate(true);
   refreshAuthUI();
@@ -139,6 +143,7 @@ async function loadAlgorithms() {
   const select = document.getElementById("algo-select");
   const hint = document.getElementById("algo-hint");
   select.innerHTML = '<option value="">선택 안 됨</option>';
+
   const algos = res?.algorithms || [];
   algos.forEach(algo => {
     const opt = document.createElement("option");
@@ -146,6 +151,7 @@ async function loadAlgorithms() {
     opt.textContent = algo;
     select.appendChild(opt);
   });
+
   if (algos.length === 0) {
     hint.textContent =
       res?.notice ||
@@ -157,9 +163,23 @@ async function loadAlgorithms() {
   }
 }
 
-async function loadGenres() {
-  const songs = await apiFetch("/api/songs?limit=200");
-  if (!songs) return;
+async function loadInitialCatalog(retries = 5, delayMs = 800) {
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    const songs = await apiFetch("/api/songs?limit=200");
+    if (songs?.length) {
+      renderGenresFromSongs(songs);
+      currentFeedContext = { type: "catalog", genre: null };
+      updateMainGrid(filterVisibleSongs(songs).slice(0, 3), false);
+      return;
+    }
+    await sleep(delayMs);
+  }
+
+  document.getElementById("song-grid").innerHTML =
+    "<p class='placeholder'>초기 곡 목록을 불러오지 못했습니다. 잠시 후 새로고침해 주세요.</p>";
+}
+
+function renderGenresFromSongs(songs) {
   const genres = [...new Set(songs.map(s => s.genre).filter(Boolean))];
   const list = document.getElementById("genre-list");
   list.innerHTML = "";
@@ -170,6 +190,7 @@ async function loadGenres() {
     el.addEventListener("click", () => {
       document.querySelectorAll(".genre-item").forEach(g => g.classList.remove("active"));
       el.classList.add("active");
+      currentGenre = genre;
       loadSongs(genre);
     });
     list.appendChild(el);
@@ -177,9 +198,14 @@ async function loadGenres() {
 }
 
 async function loadSongs(genre = null) {
+  currentGenre = genre;
   const url = genre ? `/api/songs?limit=30&genre=${encodeURIComponent(genre)}` : "/api/songs?limit=30";
   const songs = await apiFetch(url);
-  if (songs) renderGrid(songs.slice(0, 3), "song-grid", false);
+  if (songs) {
+    const visibleSongs = filterVisibleSongs(songs).slice(0, 3);
+    currentFeedContext = { type: "catalog", genre };
+    updateMainGrid(visibleSongs, false);
+  }
 }
 
 // ── 추천 ──────────────────────────────────────────────────
@@ -191,11 +217,13 @@ async function fetchRecommendations(songId) {
   const res = await apiFetch("/api/recommend", "POST", {
     song_id:   songId,
     algorithm: algo,
-    top_k:     3,
+    top_k:     12,
+    exclude_song_ids: [...skippedSongs],
   });
 
   if (res?.recommendations) {
-    renderGrid(res.recommendations.slice(0, 3), "song-grid", true);
+    currentFeedContext = { type: "song", songId, algorithm: algo };
+    updateMainGrid(filterVisibleSongs(res.recommendations).slice(0, 3), true);
     document.getElementById("algo-badge").textContent = algo;
   }
 }
@@ -208,10 +236,12 @@ async function fetchUserRecommendations() {
   const res = await apiFetch("/api/recommend/user", "POST", {
     username: authUser.username,
     algorithm: algo,
-    top_k: 3,
+    top_k: 12,
+    exclude_song_ids: [...skippedSongs],
   });
   if (res?.recommendations) {
-    renderGrid(res.recommendations.slice(0, 3), "song-grid", true);
+    currentFeedContext = { type: "user", username: authUser.username, algorithm: algo };
+    updateMainGrid(filterVisibleSongs(res.recommendations).slice(0, 3), true);
     document.getElementById("algo-badge").textContent = `${algo} · ${authUser.username}`;
   }
 }
@@ -229,7 +259,7 @@ async function onSearch() {
   }
 
   const res = await apiFetch("/api/search", "POST", {
-    query, algorithm: algo, top_k: 3,
+    query, algorithm: algo, top_k: 12, exclude_song_ids: [...skippedSongs],
   });
 
   const block = document.getElementById("search-results-block");
@@ -303,6 +333,15 @@ function openYoutube() {
 
 // ── 렌더링 ────────────────────────────────────────────────
 
+function updateMainGrid(songs, showScore) {
+  currentFeed = songs.slice();
+  renderGrid(currentFeed, "song-grid", showScore);
+}
+
+function filterVisibleSongs(songs) {
+  return (songs || []).filter(song => song?.song_id && !skippedSongs.has(song.song_id));
+}
+
 function renderGrid(songs, containerId, showScore) {
   const container = document.getElementById(containerId);
   container.innerHTML = "";
@@ -367,11 +406,62 @@ function renderGrid(songs, containerId, showScore) {
     tpl.querySelector(".btn-skip").addEventListener("click", async e => {
       e.stopPropagation();
       await logInteraction(song.song_id, "skip");
-      card.style.opacity = "0.3";
+      skippedSongs.add(song.song_id);
+      await handleSkip(song.song_id);
     });
 
     container.appendChild(tpl);
   });
+}
+
+async function handleSkip(songId) {
+  currentFeed = currentFeed.filter(song => song.song_id !== songId);
+
+  if (currentFeed.length < 3) {
+    await refillRecommendations();
+  } else {
+    renderGrid(currentFeed.slice(0, 3), "song-grid", hasScoredSongs(currentFeed));
+  }
+}
+
+async function refillRecommendations() {
+  const ctx = currentFeedContext;
+  if (ctx.type === "song" && ctx.songId) {
+    const res = await apiFetch("/api/recommend", "POST", {
+      song_id: ctx.songId,
+      algorithm: ctx.algorithm,
+      top_k: 20,
+      exclude_song_ids: [...skippedSongs],
+    });
+    if (res?.recommendations) {
+      updateMainGrid(filterVisibleSongs(res.recommendations).slice(0, 3), true);
+      return;
+    }
+  }
+
+  if (ctx.type === "user" && ctx.username) {
+    const res = await apiFetch("/api/recommend/user", "POST", {
+      username: ctx.username,
+      algorithm: ctx.algorithm,
+      top_k: 20,
+      exclude_song_ids: [...skippedSongs],
+    });
+    if (res?.recommendations) {
+      updateMainGrid(filterVisibleSongs(res.recommendations).slice(0, 3), true);
+      return;
+    }
+  }
+
+  if (ctx.type === "catalog") {
+    await loadSongs(ctx.genre || null);
+    return;
+  }
+
+  renderGrid(currentFeed.slice(0, 3), "song-grid", hasScoredSongs(currentFeed));
+}
+
+function hasScoredSongs(songs) {
+  return (songs || []).some(song => song?.score != null);
 }
 
 function renderLiked() {
@@ -422,4 +512,8 @@ async function apiFetch(url, method = "GET", body = null) {
     console.error("API 오류:", e);
     return null;
   }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }

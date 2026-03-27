@@ -115,6 +115,7 @@ body {
 }
 .algo-hint.hidden { display: none; }
 
+
 .genre-list { display: flex; flex-direction: column; gap: 4px; }
 .genre-item {
   padding: 6px 10px;

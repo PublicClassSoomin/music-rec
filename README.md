@@ -4,27 +4,6 @@ SQLite 기반 곡·오디오 특성 저장, FAISS 유사도 검색, **JWT 인증
 
 ## 프로젝트 구조
 
-```text
-music-rec-base/
-├── api/
-│   └── main.py                # FastAPI: 인증, 추천/검색/인터랙션/좋아요 API
-├── data/
-│   ├── melon_pipeline.py      # Melon 크롤링 + YouTube 매칭 + 오디오 특성 추출
-│   ├── database.py            # SQLite 초기화/CRUD, interactions·좋아요 조회
-│   └── faiss_index.py         # 오디오 특성 기반 FAISS 인덱스
-├── algorithms/
-│   ├── base.py                # 추천기 인터페이스 베이스
-│   └── faiss_cbf.py           # 베이스 샘플: FAISS 오디오 유사도 + 키워드 검색
-├── evaluation/
-│   └── metrics.py             # 추천 평가 유틸
-├── static/                    # 웹 UI (인증 게이트, 홈·검색·좋아요, 플레이어)
-├── utils/
-│   └── config.py              # 환경변수, JWT, 수집/추천 설정
-├── docs/                      # 팀장 로컬 문서 (Git 제외 — `.gitignore`의 `docs/`)
-├── requirements.txt
-└── README.md
-```
-
 ## 요구 환경
 
 - Python 3.11 권장
@@ -33,7 +12,7 @@ music-rec-base/
 
 ## 설치
 
-```bash
+```sh
 cd music-rec-base
 python3.11 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
@@ -43,7 +22,8 @@ pip install -r requirements.txt
 
 > 참고: `scikit-surprise`는 일부 macOS 환경에서 빌드 이슈가 있어 기본 의존성에서 분리되어 있습니다. 필요 시에만 수동 설치하세요.
 >
-> ```bash
+
+```sh
 > pip install scikit-surprise==1.1.4
 > ```
 
@@ -51,7 +31,8 @@ pip install -r requirements.txt
 
 템플릿 **`.env.example`** 을 복사해 `.env` 를 만든 뒤 값을 채우세요.
 
-```bash
+```
+
 cp .env.example .env
 ```
 
@@ -64,7 +45,6 @@ JWT_EXPIRE_HOURS=24
 # GEMINI_API_KEY=
 # YOUTUBE_API_KEY=
 ```
-
 
 | 변수                 | 설명                                       |
 | ------------------ | ---------------------------------------- |
@@ -79,7 +59,7 @@ JWT_EXPIRE_HOURS=24
 
 ### Melon 기반 통합 파이프라인
 
-```bash
+```sh
 python data/melon_pipeline.py
 ```
 
@@ -95,7 +75,7 @@ YouTube **Data API v3**로 메타만 모으는 모듈이 필요하면 팀에서 
 
 ## API 실행
 
-```bash
+```sh
 uvicorn api.main:app --reload
 ```
 
@@ -142,7 +122,7 @@ FAISS가 비어 있거나 초기화에 실패하면 `recommenders`가 비어 있
 
 ## DB 확인
 
-```bash
+```sh
 sqlite3 music_rec.db
 ```
 

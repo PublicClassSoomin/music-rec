@@ -20,15 +20,23 @@ song_df    = None
 recommenders = {}   # {"알고리즘명": recommender 인스턴스}
 
 
-@app.on_event("startup")
-async def startup():
-    global song_df
+def _initialize_app_state() -> None:
+    """
+    서버가 추천에 필요한 전역 상태를 한 번에 준비하는 공통 초기화 함수.
+
+    startup()에서만 초기화에 의존하면, 개발 중 리로드 타이밍이나 첫 요청 시점에
+    song_df가 아직 비어 있어서 홈 화면이 비는 경우가 생길 수 있습니다.
+    그래서 이 함수로 DB 로드와 추천기 등록을 묶어두고, 필요하면 요청 처리 중에도
+    다시 호출할 수 있게 만들어 안정성을 높입니다.
+    """
+    global song_df, recommenders
+
     init_db()
     song_df = get_all_songs()
     print(f"[API] {len(song_df)}곡 로드 완료")
 
-    # FAISS 인덱스: 이 블록 안의 지역 변수 faiss_index를 알고리즘 생성 시 그대로 넘깁니다.
-    # 다른 함수로 분리할 경우 faiss_index를 인자로 전달하거나 모듈 전역에 보관하세요.
+    recommenders.clear()
+
     faiss_index = None
     try:
         from data.faiss_index import MusicFaissIndex
@@ -40,16 +48,32 @@ async def startup():
 
     if faiss_index is not None and getattr(faiss_index, "is_built", False):
         from algorithms.faiss_cbf import FaissContentRecommender
+        from algorithms.hybrid_recommender import HybridRecommender
 
         recommenders["faiss_cbf"] = FaissContentRecommender(faiss_index)
         recommenders["faiss_cbf"].fit(song_df)
-        print("[API] 샘플 알고리즘 등록: faiss_cbf")
+        print("[API] 알고리즘 등록: faiss_cbf")
 
-    # ── 팀원 추가 등록 예시 (같은 startup() 안에서 faiss_index 사용) ──
-    # from algorithms.my_algo import MyRecommender
-    # recommenders["my_algo"] = MyRecommender(faiss_index)
-    # recommenders["my_algo"].fit(song_df)
-    # ────────────────────────────────────────────────────────────────
+        recommenders["hybrid"] = HybridRecommender(faiss_index)
+        recommenders["hybrid"].fit(song_df)
+        print("[API] 알고리즘 등록: hybrid")
+
+
+def _ensure_app_ready() -> None:
+    """
+    요청 처리 직전에 앱 상태가 준비되어 있는지 확인하고, 비어 있으면 즉시 초기화하는 함수.
+
+    기본 홈 화면은 /api/songs 응답에 의존하므로, startup() 타이밍 이슈가 있어도
+    이 함수가 있으면 첫 요청에서 바로 상태를 복구할 수 있습니다.
+    """
+    global song_df, recommenders
+    if song_df is None or song_df.empty or not recommenders:
+        _initialize_app_state()
+
+
+@app.on_event("startup")
+async def startup():
+    _initialize_app_state()
 
 
 # ── 웹 UI ─────────────────────────────────────────────────
@@ -63,8 +87,7 @@ async def root():
 
 @app.get("/api/songs")
 def list_songs(limit: int = 30, genre: str = None):
-    if song_df is None:
-        raise HTTPException(status_code=503, detail="서버 초기화 중입니다. 잠시 후 다시 시도하세요.")
+    _ensure_app_ready()
     df = song_df.copy()
     if genre:
         df = df[df["genre"] == genre]
@@ -75,6 +98,7 @@ def list_songs(limit: int = 30, genre: str = None):
 
 @app.get("/api/songs/{song_id}")
 def get_song_detail(song_id: str):
+    _ensure_app_ready()
     song = get_song(song_id)
     if not song:
         raise HTTPException(status_code=404, detail="곡을 찾을 수 없습니다")
@@ -87,18 +111,21 @@ class RecommendRequest(BaseModel):
     song_id:   str
     algorithm: str = "default"
     top_k:     int = 10
+    exclude_song_ids: list[str] = []
 
 
 class UserRecommendRequest(BaseModel):
     username:  str
     algorithm: str = "default"
     top_k:     int = 10
+    exclude_song_ids: list[str] = []
 
 
 class SearchRequest(BaseModel):
     query:     str
     algorithm: str = "default"
     top_k:     int = 10
+    exclude_song_ids: list[str] = []
 
 
 class AuthRequest(BaseModel):
@@ -126,6 +153,26 @@ def _get_current_username(authorization: str | None) -> str:
         raise HTTPException(status_code=401, detail="토큰이 만료되었습니다")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
+
+
+def _exclude_song_ids(rec_dict: dict[str, float], exclude_song_ids: list[str]) -> dict[str, float]:
+    """
+    추천 결과에서 프론트가 제외 요청한 song_id들을 제거하는 후처리 함수.
+
+    스킵(X) 버튼을 눌렀을 때 같은 곡이 다시 추천되는 문제를 막기 위해,
+    프론트가 보낸 제외 목록을 서버 결과에 한 번 더 적용합니다.
+
+    Args:
+        rec_dict: 추천기에서 생성한 {song_id: score} 결과
+        exclude_song_ids: 응답에서 제외할 곡 ID 목록
+
+    Returns:
+        제외 목록이 반영된 추천 결과 딕셔너리
+    """
+    if not exclude_song_ids:
+        return rec_dict
+    excluded = set(exclude_song_ids)
+    return {sid: score for sid, score in rec_dict.items() if sid not in excluded}
 
 
 @app.post("/api/signup")
@@ -166,35 +213,47 @@ def list_likes(authorization: str | None = Header(default=None)):
 @app.post("/api/recommend")
 def recommend_by_song(req: RecommendRequest):
     """곡 기반 추천"""
+    _ensure_app_ready()
     if req.algorithm not in recommenders:
         raise HTTPException(
             status_code=400,
             detail=f"알고리즘 '{req.algorithm}' 없음. 사용 가능: {list(recommenders.keys())}",
         )
-    rec_dict = recommenders[req.algorithm].recommend(req.song_id, req.top_k)
+    rec_dict = recommenders[req.algorithm].recommend(
+        req.song_id,
+        req.top_k + len(req.exclude_song_ids),
+    )
+    rec_dict = _exclude_song_ids(rec_dict, req.exclude_song_ids)
     return _format(rec_dict, req.algorithm)
 
 
 @app.post("/api/recommend/user")
 def recommend_by_user(req: UserRecommendRequest, authorization: str | None = Header(default=None)):
     """유저 기반 추천"""
+    _ensure_app_ready()
     username = _get_current_username(authorization)
     if req.algorithm not in recommenders:
         raise HTTPException(status_code=400, detail="알고리즘 없음")
     user_id = get_or_create_user(username)
-    rec_dict = recommenders[req.algorithm].recommend_for_user(user_id, req.top_k)
+    rec_dict = recommenders[req.algorithm].recommend_for_user(
+        user_id,
+        req.top_k + len(req.exclude_song_ids),
+    )
+    rec_dict = _exclude_song_ids(rec_dict, req.exclude_song_ids)
     return _format(rec_dict, req.algorithm)
 
 
 @app.post("/api/search")
 def search_by_query(req: SearchRequest):
     """자연어 검색 (BERT / LangChain 계열에서 구현)"""
+    _ensure_app_ready()
     if req.algorithm not in recommenders:
         raise HTTPException(status_code=400, detail="알고리즘 없음")
     algo = recommenders[req.algorithm]
     if not hasattr(algo, "search_by_query"):
         raise HTTPException(status_code=400, detail="이 알고리즘은 자연어 검색을 지원하지 않습니다")
-    rec_dict = algo.search_by_query(req.query, req.top_k)
+    rec_dict = algo.search_by_query(req.query, req.top_k + len(req.exclude_song_ids))
+    rec_dict = _exclude_song_ids(rec_dict, req.exclude_song_ids)
     return _format(rec_dict, req.algorithm)
 
 
@@ -244,6 +303,7 @@ _EMPTY_ALGO_NOTICE = (
 
 @app.get("/api/algorithms")
 def list_algorithms():
+    _ensure_app_ready()
     keys = list(recommenders.keys())
     body: dict = {"algorithms": keys}
     if not keys:

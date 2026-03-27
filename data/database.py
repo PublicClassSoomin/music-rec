@@ -265,3 +265,45 @@ def get_user_liked_songs(user_id: int) -> list[dict]:
         if row:
             out.append(row)
     return out
+
+
+def get_song_interaction_stats(song_id: str) -> dict[str, int]:
+    """
+    특정 곡에 대해 재생/좋아요/스킵 관련 집계 값을 한 번에 가져오는 통계 조회 함수.
+
+    경량 하이브리드 추천기에서는 이 값을 이용해 행동 보정 점수를 계산할 수 있습니다.
+    즉, 오디오 유사도만 보지 않고 실제 사용자 반응을 약하게 반영할 때 사용하는 보조 함수입니다.
+
+    집계 기준:
+      - play_count: action == "play" 개수
+      - like_count: action == "like" 개수
+      - skip_count: action == "skip" 개수
+      - unlike_count: action == "unlike" 개수
+
+    Args:
+        song_id: 통계를 확인할 대상 곡 ID
+
+    Returns:
+        곡별 인터랙션 집계 딕셔너리
+    """
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT
+            SUM(CASE WHEN action = 'play' THEN 1 ELSE 0 END)  AS play_count,
+            SUM(CASE WHEN action = 'like' THEN 1 ELSE 0 END)  AS like_count,
+            SUM(CASE WHEN action = 'skip' THEN 1 ELSE 0 END)  AS skip_count,
+            SUM(CASE WHEN action = 'unlike' THEN 1 ELSE 0 END) AS unlike_count
+        FROM interactions
+        WHERE song_id = ?
+        """,
+        (song_id,),
+    ).fetchone()
+    conn.close()
+
+    return {
+        "play_count": int(row["play_count"] or 0),
+        "like_count": int(row["like_count"] or 0),
+        "skip_count": int(row["skip_count"] or 0),
+        "unlike_count": int(row["unlike_count"] or 0),
+    }
