@@ -142,9 +142,3 @@ SELECT * FROM songs LIMIT 10;
 - 반환 포맷은 `{song_id: score}` 딕셔너리 권장
 - `api/main.py`의 `startup()`에서 인스턴스 생성·학습·`recommenders["키"]` 등록
 
-## 추가 문서 (로컬)
-
-- `docs/project-overview.md` — 기획·역할 분담
-- `docs/team-faq.md` — 실행·코드 Q&A
-
-`docs/` 는 **팀장 로컬 확인용**으로 `.gitignore`에 두어 Git에 포함하지 않습니다. 팀원에게는 필요 시 파일을 따로 공유하세요.
