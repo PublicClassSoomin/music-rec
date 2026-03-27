@@ -142,6 +142,16 @@ SELECT * FROM songs LIMIT 10;
 - 반환 포맷은 `{song_id: score}` 딕셔너리 권장
 - `api/main.py`의 `startup()`에서 인스턴스 생성·학습·`recommenders["키"]` 등록
 
+## 내가 사용한 알고리즘: `hybrid`
+
+팀원 발표용으로 별도 문서를 만들었습니다.
+
+- `docs/HYBRID_TEAM_PRESENTATION.md` — 팀원에게 바로 보여줄 발표용 요약
+- `docs/HYBRID_RECOMMENDER_BEGINNER_GUIDE.md` — 구현 설명 상세본
+- `docs/HYBRID_IMPLEMENTATION_CHECKLIST.md` — 구현 체크리스트
+- `docs/ALGO_COMPARE_BLOG.md` — 알고리즘 비교 글
+- `docs/algo_compare_presentation.html` — 발표용 비교 HTML
+
 ## 추가 문서 (로컬)
 
 - `docs/project-overview.md` — 기획·역할 분담
