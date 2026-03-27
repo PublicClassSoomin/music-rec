@@ -51,6 +51,17 @@ async def startup():
     # recommenders["my_algo"].fit(song_df)
     # ────────────────────────────────────────────────────────────────
 
+    # ── LLM Inference 추천기 (GPT + LangGraph → FAISS 검색) ──
+    if faiss_index is not None and getattr(faiss_index, "is_built", False):
+        try:
+            from algorithms.llm_inference import LLMInferenceRecommender
+
+            recommenders["llm_inference"] = LLMInferenceRecommender(faiss_index)
+            recommenders["llm_inference"].fit(song_df)
+            print("[API] LLM 알고리즘 등록: llm_inference")
+        except Exception as e:
+            print(f"[API] LLM 추천기 등록 실패 (OPENAI_API_KEY 확인): {e}")
+
 
 # ── 웹 UI ─────────────────────────────────────────────────
 

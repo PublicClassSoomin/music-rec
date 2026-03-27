@@ -21,6 +21,7 @@ llvmlite==0.42.0
 
 # LangChain / LangGraph
 langchain>=0.1.0
+langchain-openai>=0.1.0
 langchain-google-genai>=1.0.0
 langgraph>=0.0.30
 
