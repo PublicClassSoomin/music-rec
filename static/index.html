@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>🎵 MusicRec</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Circular+Std:wght@400;700&family=DM+Sans:wght@300;400;500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/style.css" />
@@ -40,6 +42,12 @@
       <p id="algo-hint" class="algo-hint hidden" role="status"></p>
     </div>
 
+    <!-- 설정 및 표보기 버튼 -->
+    <div class="sidebar-section">
+      <button id="hybrid-config-btn" class="auth-btn ghost" type="button">하이브리드 설정</button>
+      <button id="eval-open-btn" class="auth-btn ghost" type="button">표보기</button>
+    </div>
+
     <div class="sidebar-section">
       <p class="sidebar-label">장르</p>
       <div id="genre-list" class="genre-list"></div>
@@ -66,25 +74,159 @@
           <button id="user-reco-btn" class="auth-btn auth-btn--hero">내 취향 추천 받기</button>
         </div>
         <div class="search-bar search-bar--hero search-bar--home">
-          <input id="search-input" type="text" placeholder="'새벽에 공부할 때 듣기 좋은 음악' 처럼 입력해보세요" />
-          <button id="search-btn">검색</button>
+          <input id="search-input" type="text" placeholder="가수·장르·분위기 등을 적어도 되고, '새벽 공부 플레이리스트'처럼 적어도 됩니다" aria-label="음악 검색" />
+          <button id="search-btn" type="button">검색</button>
         </div>
+        <p class="search-bar-hint">이 입력문만 검색에 씁니다. ‘슬픈’, ‘발라드’, 가수명 등 구체 단어는 메타·장르와 맞추고, ‘요즘 노래’처럼 일반어만 있으면 문장 의미(임베딩)로 찾아요.</p>
       </header>
       <div class="featured-stage featured-stage--stack">
-        <div id="song-grid" class="featured-three">
+        <div id="song-grid" class="featured-grid">
           <p class="placeholder">곡을 클릭하거나 검색해서 추천을 받아보세요.</p>
         </div>
         <div id="search-results-block" class="search-results-block" hidden>
-          <h3 class="subsection-title">검색 결과</h3>
-          <div id="search-result" class="featured-three"></div>
+          <h3 class="subsection-title">검색 결과 <span class="subsection-title-note">(유사도 높은 순)</span></h3>
+          <div id="search-result" class="featured-grid"></div>
         </div>
       </div>
     </section>
+
+    <!-- 하이브리드 설정 모달 -->
+    <div id="hybrid-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="hybrid-modal-title">
+      <div class="modal-backdrop" data-modal-dismiss="hybrid-modal" aria-hidden="true"></div>
+      <div class="modal-shell">
+        <div class="modal-card hybrid-card">
+          <header class="modal-card-header">
+            <div>
+              <h3 id="hybrid-modal-title">하이브리드 설정</h3>
+              <p class="modal-card-sub">오디오 유사도(FAISS)와 공동출현을 섞는 비율과 모드를 조절해요</p>
+            </div>
+            <button type="button" class="modal-close-btn" id="hyb-close-x" aria-label="닫기">×</button>
+          </header>
+
+          <div class="modal-card-body">
+            <section class="hyb-section" aria-labelledby="hyb-mode-label">
+              <span id="hyb-mode-label" class="hyb-section-label">공동출현 모드</span>
+              <div id="hyb-mode-seg" class="hyb-mode-seg" role="group" aria-label="공동출현 모드">
+                <button type="button" class="hyb-mode-chip" data-hyb-mode="simple" aria-pressed="false">Simple</button>
+                <button type="button" class="hyb-mode-chip is-active" data-hyb-mode="advanced" aria-pressed="true">Advanced</button>
+              </div>
+              <p class="hyb-field-hint">Simple은 좋아요만 모읍니다. Advanced는 재생·스킵·시간 감쇠를 반영합니다. (곡/유저 추천에 반영)</p>
+            </section>
+
+            <section class="hyb-section" aria-labelledby="hyb-balance-label-text">
+              <div class="hyb-slider-head">
+                <span id="hyb-balance-label-text" class="hyb-section-label">추천 가중치 (오디오 ↔ 협업)</span>
+                <div class="hyb-balance-pill" aria-live="polite">
+                  <span class="hyb-balance-side hyb-balance-side--content">
+                    <span class="hyb-balance-name">오디오</span>
+                    <strong id="hyb-balance-pct-content">55</strong><span class="hyb-pct">%</span>
+                  </span>
+                  <span class="hyb-balance-divider"></span>
+                  <span class="hyb-balance-side hyb-balance-side--cooc">
+                    <span class="hyb-balance-name">협업</span>
+                    <strong id="hyb-balance-pct-cooc">45</strong><span class="hyb-pct">%</span>
+                  </span>
+                </div>
+              </div>
+              <div class="hyb-range-track hyb-range-track--balance">
+                <span class="hyb-range-tag">🎛</span>
+                <input type="range" id="hyb-balance" class="hyb-range hyb-range--balance" min="0" max="100" value="55" step="1" aria-valuetext="오디오 55%, 협업 45%" />
+                <span class="hyb-range-tag">👥</span>
+              </div>
+              <p class="hyb-field-hint">슬라이더 한 개로 <code class="hyb-inline-code">weight_content</code> / <code class="hyb-inline-code">weight_cooc</code> 비율을 맞춥니다. 합은 항상 100%입니다. (곡/유저 추천에만 적용)</p>
+            </section>
+
+            <section class="hyb-section">
+              <div class="hyb-slider-head">
+                <span class="hyb-section-label">Threshold (최소 점수)</span>
+                <span class="hyb-threshold-readout mono" id="hyb-threshold-readout">0.00</span>
+              </div>
+              <p class="hyb-field-hint">하이브리드 합산 점수가 이 값보다 낮으면 추천 후보에서 뺍니다. (곡 추천·내 취향 추천에만 적용, 검색창 검색에는 적용 안 됨)</p>
+              <input type="range" id="hyb-threshold" class="hyb-range hyb-range--full" min="0" max="100" value="0" step="1" aria-label="threshold 0에서 1" />
+            </section>
+
+            <details class="hyb-advanced-block">
+              <summary class="hyb-advanced-summary">검색 옵션</summary>
+              <div class="hyb-advanced-inner">
+                <p class="hyb-field-hint hyb-field-hint--tight">
+                  자연어 검색 문장은 홈 화면 검색창에만 입력하세요. 그 텍스트가 곡 메타(제목·가수·장르)와 맞는지 보는 단계와 임베딩 단계에 쓰입니다.
+                </p>
+                <label class="hyb-switch">
+                  <input id="hyb-use-llm-search" type="checkbox" />
+                  <span class="hyb-switch-ui" aria-hidden="true"></span>
+                  <span class="hyb-switch-text">검색 시 LLM으로 질의 확장 (임베딩 단계)</span>
+                </label>
+              </div>
+            </details>
+          </div>
+
+          <footer class="modal-card-footer">
+            <button id="hyb-cancel-btn" class="auth-btn ghost modal-footer-btn" type="button">취소</button>
+            <button id="hyb-save-btn" class="auth-btn modal-footer-btn" type="button">적용</button>
+          </footer>
+        </div>
+      </div>
+    </div>
+
+    <!-- 평가 결과 모달 -->
+    <div id="eval-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="eval-modal-title">
+      <div class="modal-backdrop" data-modal-dismiss="eval-modal" aria-hidden="true"></div>
+      <div class="modal-shell modal-shell--eval">
+        <div class="modal-card modal-card-wide">
+          <header class="modal-card-header">
+            <div>
+              <h3 id="eval-modal-title">평가 결과</h3>
+              <p class="modal-card-sub">오프라인 지표를 표와 차트로 확인합니다</p>
+            </div>
+            <button type="button" class="modal-close-btn" id="eval-close-x" aria-label="닫기">×</button>
+          </header>
+          <div class="modal-card-body modal-card-body--flush">
+            <div class="eval-help">
+              <p class="eval-help-lead">
+                <strong>이 숫자의 의미</strong>는 “기준 곡 하나를 골랐을 때, 그 유저가 실제로 함께 들었던 곡(좋아요 또는 충분히 재생)이 추천 상위에 얼마나 올라왔는가”입니다.
+                모델을 추가로 <strong>학습(경사 하강)</strong>시키지는 않고, DB·오디오 특성·로그로 만든 인덱스로 점수만 계산합니다.
+              </p>
+              <ul class="eval-help-list">
+                <li><strong>Precision@K</strong> — 추천 상위 K곡 중 ‘맞은’ 곡 비율. 높을수록 좋음.</li>
+                <li><strong>Recall@K</strong> — 정답으로 두는 곡들 중, K 안에 들어온 비율.</li>
+                <li><strong>NDCG@K</strong> — 맞은 곡이 목록 <em>위쪽</em>에 올수록 더 높음 (순위 품질).</li>
+              </ul>
+              <p class="eval-help-note">표·차트가 비면 <strong>평가 케이스가 0</strong>입니다. 좋아요 2곡 이상이거나, 재생 20초 이상 기록이 2곡 이상 있는 유저가 있어야 케이스가 생깁니다.</p>
+            </div>
+            <div id="eval-run-info" class="eval-run-info" hidden aria-live="polite"></div>
+            <div class="eval-chart-wrap">
+              <canvas id="eval-chart"></canvas>
+            </div>
+            <div id="eval-table-wrap" class="eval-table-scroll"></div>
+          </div>
+          <footer class="modal-card-footer">
+            <button id="eval-run-btn" class="auth-btn modal-footer-btn" type="button">평가 실행</button>
+            <button id="eval-close-btn" class="auth-btn ghost modal-footer-btn" type="button">닫기</button>
+          </footer>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
     <!-- 좋아요 뷰 -->
     <section id="view-liked" class="view">
       <h2 class="section-title">좋아요한 곡</h2>
       <div id="liked-list" class="song-grid"></div>
+    </section>
+
+    <!-- body 그리드 2행(80px)에 끼이지 않도록 main 안에 둠; 표시는 position:fixed -->
+    <section class="player-embed-panel" id="player-embed-wrap" hidden>
+      <div class="player-embed-panel__head">
+        <h3 class="player-embed-panel__title">내장 플레이어</h3>
+        <div class="player-embed-panel__actions">
+          <button type="button" class="player-embed-minimize" id="btn-embed-minimize" aria-pressed="false" title="사이드바 쪽 작은 패널로 보기">축소</button>
+          <button type="button" class="player-embed-close" id="btn-embed-close" aria-label="내장 플레이어 닫기">닫기</button>
+        </div>
+      </div>
+      <div id="yt-player" class="yt-player-host"></div>
+      <p id="yt-player-hint" class="algo-hint">하이브리드 선택 시 여기서 재생하면 재생 시간이 서버에 기록됩니다. (YouTube 광고 추적 CORS 경고는 브라우저 콘솔에 나올 수 있으며 재생과 무관합니다.)</p>
     </section>
 
   </main>
@@ -104,7 +246,7 @@
     </div>
 
     <div class="player-controls">
-      <button id="btn-youtube" class="btn-youtube" disabled>
+      <button id="btn-youtube" class="btn-youtube" disabled type="button">
         ▶ YouTube에서 듣기
       </button>
     </div>

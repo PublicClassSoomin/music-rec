@@ -11,6 +11,8 @@ from data.database import (
     get_user_liked_songs,
 )
 from utils.config import JWT_SECRET, JWT_EXPIRE_HOURS
+from typing import Any
+from pydantic import Field
 
 app = FastAPI(title="🎵 AI 음악 추천 시스템", version="1.0.0")
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -45,6 +47,19 @@ async def startup():
         recommenders["faiss_cbf"].fit(song_df)
         print("[API] 샘플 알고리즘 등록: faiss_cbf")
 
+        from algorithms.hybrid_faiss_cooc import HybridFaissCoocRecommender
+
+        # weight_content / weight_cooc 는 데이터 규모에 맞게 조정해야 함.
+        # (좋아요 로그가 적을 때는 content를 더 크게: 예 0.75 / 0.25)
+        recommenders["hybrid_faiss_cooc"] = HybridFaissCoocRecommender(
+            faiss_index,
+            weight_content=0.55,
+            weight_cooc=0.45,
+            faiss_candidate_multiplier=4,
+        )
+        recommenders["hybrid_faiss_cooc"].fit(song_df)
+        print("[API] 알고리즘 등록: hybrid_faiss_cooc")
+
     # ── 팀원 추가 등록 예시 (같은 startup() 안에서 faiss_index 사용) ──
     # from algorithms.my_algo import MyRecommender
     # recommenders["my_algo"] = MyRecommender(faiss_index)
@@ -57,6 +72,12 @@ async def startup():
 @app.get("/")
 async def root():
     return FileResponse("static/index.html")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """브라우저 기본 요청으로 인한 404 방지"""
+    return FileResponse("static/favicon.svg", media_type="image/svg+xml")
 
 
 # ── 곡 API ────────────────────────────────────────────────
@@ -87,24 +108,36 @@ class RecommendRequest(BaseModel):
     song_id:   str
     algorithm: str = "default"
     top_k:     int = 10
-
+    options: dict[str, Any] | None = None
 
 class UserRecommendRequest(BaseModel):
     username:  str
     algorithm: str = "default"
     top_k:     int = 10
+    options: dict[str, Any] | None = None
 
 
 class SearchRequest(BaseModel):
     query:     str
     algorithm: str = "default"
     top_k:     int = 10
+    options: dict[str, Any] | None = None
 
 
 class AuthRequest(BaseModel):
     username: str
     password: str
 
+class HybridOptions(BaseModel):
+    mode: str = "advanced" # simple | advanced
+    weights: dict[str, float] = Field(default_factory=lambda: {"content": 0.55, "cooc": 0.45})
+    threshold: float = 0.0
+    filters: dict[str, str] = Field(default_factory=dict)
+    use_llm_search: bool = False
+
+class EvalRunRequest(BaseModel):
+    algorithm: str
+    options: dict[str, Any] | None = None
 
 def _create_token(username: str) -> str:
     exp = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
@@ -171,7 +204,11 @@ def recommend_by_song(req: RecommendRequest):
             status_code=400,
             detail=f"알고리즘 '{req.algorithm}' 없음. 사용 가능: {list(recommenders.keys())}",
         )
-    rec_dict = recommenders[req.algorithm].recommend(req.song_id, req.top_k)
+    algo = recommenders[req.algorithm]
+    if hasattr(algo, "recommend_with_options"):
+        rec_dict = algo.recommend_with_options(req.song_id, req.top_k, req.options or {})
+    else:
+        rec_dict = algo.recommend(req.song_id, req.top_k)
     return _format(rec_dict, req.algorithm)
 
 
@@ -182,7 +219,11 @@ def recommend_by_user(req: UserRecommendRequest, authorization: str | None = Hea
     if req.algorithm not in recommenders:
         raise HTTPException(status_code=400, detail="알고리즘 없음")
     user_id = get_or_create_user(username)
-    rec_dict = recommenders[req.algorithm].recommend_for_user(user_id, req.top_k)
+    algo = recommenders[req.algorithm]
+    if hasattr(algo, "recommend_for_user_with_options"):
+        rec_dict = algo.recommend_for_user_with_options(user_id, req.top_k, req.options or {})
+    else:
+        rec_dict = algo.recommend_for_user(user_id, req.top_k)
     return _format(rec_dict, req.algorithm)
 
 
@@ -192,9 +233,12 @@ def search_by_query(req: SearchRequest):
     if req.algorithm not in recommenders:
         raise HTTPException(status_code=400, detail="알고리즘 없음")
     algo = recommenders[req.algorithm]
-    if not hasattr(algo, "search_by_query"):
+    if hasattr(algo, "search_by_query_with_options"):
+        rec_dict = algo.search_by_query_with_options(req.query, req.top_k, req.options or {})
+    elif hasattr(algo, "search_by_query"):
+        rec_dict = algo.search_by_query(req.query, req.top_k)
+    else: 
         raise HTTPException(status_code=400, detail="이 알고리즘은 자연어 검색을 지원하지 않습니다")
-    rec_dict = algo.search_by_query(req.query, req.top_k)
     return _format(rec_dict, req.algorithm)
 
 
@@ -249,3 +293,105 @@ def list_algorithms():
     if not keys:
         body["notice"] = _EMPTY_ALGO_NOTICE
     return body
+
+@app.post("/api/eval/run")
+def run_eval(req: EvalRunRequest):
+    if req.algorithm not in recommenders:
+        raise HTTPException(status_code=400, detail=f"알고리즘 '{req.algorithm}' 없음")
+    
+    algo = recommenders[req.algorithm]
+
+    # 요청 옵션 파싱
+    opts = dict(req.options or {})
+    k_list = opts.get("k_list", [5, 10, 20])
+    if not isinstance(k_list, list) or not k_list:
+        k_list = [5, 10, 20]
+
+    # 너무 큰 K나 음수 방어
+    k_list = [int(k) for k in k_list if isinstance(k, (int, float)) and int(k) > 0]
+    if not k_list:
+        k_list = [5, 10, 20]
+
+    max_cases = int(opts.get("max_cases", 0))
+    run_variants = bool(opts.get("run_variants", True))
+
+    try:
+        from evaluation.offline_eval import (
+            hybrid_eval_weight_columns,
+            run_offline_eval_for_algorithm,
+            run_offline_eval_variants,
+        )
+
+        if run_variants:
+            result = run_offline_eval_variants(
+                algo,
+                base_options=opts,
+                k_list=k_list,
+                max_cases=max_cases,
+            )
+            body: dict[str, Any] = {
+                "algorithm": req.algorithm,
+                "mode": "variants",
+                "k_list": k_list,
+                "options_used": opts,
+                "rows": result["rows"],
+                "summary_rows": result["summary_rows"],
+                "summary": result["summary"],
+            }
+            if req.algorithm.startswith("hybrid"):
+                body["hybrid_sidebar_snapshot"] = {
+                    "mode": opts.get("mode"),
+                    "weights": opts.get("weights"),
+                    "threshold": opts.get("threshold"),
+                    "use_llm_search": opts.get("use_llm_search"),
+                }
+            return body
+
+        # 단일 옵션으로 1회 평가 (run_variants=False)
+        single = run_offline_eval_for_algorithm(
+            algo,
+            base_options=opts,
+            k_list=k_list,
+            max_cases=max_cases,
+        )
+        wcols = hybrid_eval_weight_columns(opts)
+        if wcols:
+            vm = str(opts.get("mode") or "")
+            vllm = bool(opts.get("use_llm_search"))
+            for r in single["rows"]:
+                r.update(wcols)
+                r["variant_mode"] = vm
+                r["variant_use_llm_search"] = vllm
+            summary_row = {
+                **wcols,
+                "variant_mode": vm,
+                "variant_use_llm_search": vllm,
+                "n_cases": single["n_cases"],
+                **single["summary"],
+            }
+        else:
+            summary_row = {
+                "variant": "single",
+                "n_cases": single["n_cases"],
+                **single["summary"],
+            }
+        single_body: dict[str, Any] = {
+            "algorithm": req.algorithm,
+            "mode": "single",
+            "k_list": k_list,
+            "options_used": opts,
+            "rows": single["rows"],
+            "summary_rows": [summary_row],
+            "summary": single["summary"],
+        }
+        if req.algorithm.startswith("hybrid"):
+            single_body["hybrid_sidebar_snapshot"] = {
+                "mode": opts.get("mode"),
+                "weights": opts.get("weights"),
+                "threshold": opts.get("threshold"),
+                "use_llm_search": opts.get("use_llm_search"),
+            }
+        return single_body
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"평가 실행 실패: {e}")
+

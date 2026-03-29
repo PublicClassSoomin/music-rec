@@ -265,3 +265,12 @@ def get_user_liked_songs(user_id: int) -> list[dict]:
         if row:
             out.append(row)
     return out
+
+def get_distinct_interaction_user_ids() -> list[int]:
+    """interactions 에 row가 있는(활동 기록이 존재하는) user_id 전체를 중복 없이 반환."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT user_id FROM interactions ORDER BY user_id"
+    ).fetchall()
+    conn.close()
+    return [int(r["user_id"]) for r in rows]

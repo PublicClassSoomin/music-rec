@@ -7,6 +7,55 @@ let currentUser   = () => authUser?.username || "guest";
 let likedSongs    = new Set();
 let songCache     = new Map(); // song_id -> full song object
 
+/** 추천(/recommend)용. 검색은 검색창 입력 + hybridSearchPayload()만 사용 */
+let hybridOptions = {
+  mode: "advanced",
+  weights: { content: 0.55, cooc: 0.45 },
+  threshold: 0.0,
+  use_llm_search: false,
+};
+
+/** 홈 상단 그리드: 곡/유저 추천 시 표시 개수 */
+const HOME_RECO_TOP_K = 16;
+/** 검색 API top_k (유사도 순, 아래 검색 결과 블록에만 표시) */
+const SEARCH_TOP_K = 24;
+/** 장르 클릭 시 상단 미리보기 개수 */
+const GENRE_PREVIEW_K = 6;
+
+/** score 필드가 있으면 내림차순(유사도·점수 높은 순). 없으면 원래 순서 유지 */
+function sortByScoreDesc(songs) {
+  if (!songs?.length) return [];
+  const any = songs.some(s => s && s.score != null && !Number.isNaN(Number(s.score)));
+  if (!any) return [...songs];
+  return [...songs].sort((a, b) => Number(b.score) - Number(a.score));
+}
+
+/** 검색 시 상단 #song-grid는 이전 추천·장르 미리보기라 아래와 겹쳐 보일 수 있어 안내 */
+function setHomePreviewSearchHint() {
+  document.getElementById("song-grid").innerHTML =
+    "<p class=\"placeholder\">이 칸은 <strong>검색과 별개</strong>로, 이전에 고른 장르 미리보기나 곡·취향 추천이 그대로 남아 있을 수 있어요. 방금 검색한 곡은 <strong>아래 검색 결과</strong>에만 유사도 높은 순으로 모여 있습니다.</p>";
+}
+
+/** POST /api/search 에만 넣을 옵션 (질의 문장은 payload.query) */
+function hybridSearchPayload() {
+  return {
+    use_llm_search: !!hybridOptions.use_llm_search,
+  };
+}
+
+let ytApiReady = false; // YouTube IFrame API 준비 여부
+let ytPlayer = null; // YouTube IFrame API 인스턴스
+let ytCurrentSongId = null; // 현재 재생 중인 곡 ID
+let ytPlayStartAt = null; // 재생 시작 시간
+let ytAccumulatedSec = 0; // 누적 재생 시간
+let ytHeartbeat = null; // 하트비트 타이머, 10초마다 재생 진행률을 서버에 전송
+let ytPendingLoadId = null; // 플레이어 생성 전·onReady 전에 로드할 video id
+let ytEmbedLoadedId = null; // iframe에 실제 loadVideoById 된 video id
+/** 사용자가 닫기로 숨김. 푸터 「내장 플레이어에서 듣기」로 다시 열면 해제 */
+let embedPanelDismissed = false;
+/** 축소 시 사이드바 열에 붙은 좁은 패널 */
+let embedPanelMinimized = false;
+
 // ── 초기화 ────────────────────────────────────────────────
 
 window.addEventListener("DOMContentLoaded", async () => {
@@ -22,15 +71,45 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (e.key === "Enter") onSearch();
   });
   document.getElementById("btn-youtube").addEventListener("click", openYoutube);
+  document.getElementById("btn-embed-close").addEventListener("click", closeEmbedPanel);
+  document.getElementById("btn-embed-minimize").addEventListener("click", toggleEmbedPanelMinimize);
   document.getElementById("btn-like-player").addEventListener("click", onLikePlayer);
   document.getElementById("user-reco-btn").addEventListener("click", fetchUserRecommendations);
   document.getElementById("algo-select").addEventListener("change", () => {
+    syncHybridEmbedChrome();
     if (currentSong) {
       fetchRecommendations(currentSong.song_id);
+      updatePlayer(currentSong);
     } else if (authUser) {
       fetchUserRecommendations();
     }
   });
+
+  // 하이브리드 설정 모달
+  document.getElementById("hybrid-config-btn").addEventListener("click", openHybridModal);
+  document.getElementById("hyb-cancel-btn").addEventListener("click", closeHybridModal);
+  document.getElementById("hyb-save-btn").addEventListener("click", saveHybridOptions);
+  document.getElementById("hyb-close-x").addEventListener("click", closeHybridModal);
+  document.getElementById("hyb-balance").addEventListener("input", updateHybridBalanceUI);
+  document.getElementById("hyb-threshold").addEventListener("input", updateHybridThresholdUI);
+  document.getElementById("hyb-mode-seg").addEventListener("click", onHybridModeSegClick);
+
+  document.querySelectorAll("[data-modal-dismiss]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.getAttribute("data-modal-dismiss");
+      if (id === "hybrid-modal") closeHybridModal();
+      if (id === "eval-modal") closeEvalModal();
+    });
+  });
+
+  document.getElementById("eval-open-btn").addEventListener("click", openEvalModal);
+  document.getElementById("eval-close-btn").addEventListener("click", closeEvalModal);
+  document.getElementById("eval-close-x").addEventListener("click", closeEvalModal);
+  document.getElementById("eval-run-btn").addEventListener("click", runEvaluation);
+
+  document.addEventListener("keydown", onModalEscape);
+
+  loadYoutubeIframeAPI();
 });
 
 function bindAuthEvents() {
@@ -155,6 +234,7 @@ async function loadAlgorithms() {
     hint.textContent = "";
     hint.classList.add("hidden");
   }
+  syncHybridEmbedChrome();
 }
 
 async function loadGenres() {
@@ -179,7 +259,7 @@ async function loadGenres() {
 async function loadSongs(genre = null) {
   const url = genre ? `/api/songs?limit=30&genre=${encodeURIComponent(genre)}` : "/api/songs?limit=30";
   const songs = await apiFetch(url);
-  if (songs) renderGrid(songs.slice(0, 3), "song-grid", false);
+  if (songs) renderGrid(songs.slice(0, GENRE_PREVIEW_K), "song-grid", false);
 }
 
 // ── 추천 ──────────────────────────────────────────────────
@@ -188,14 +268,17 @@ async function fetchRecommendations(songId) {
   const algo = currentAlgo();
   if (!algo) return;
 
-  const res = await apiFetch("/api/recommend", "POST", {
+  const payload = {
     song_id:   songId,
     algorithm: algo,
-    top_k:     3,
-  });
+    top_k:     HOME_RECO_TOP_K,
+  };
+  if (isHybridAlgo(algo)) payload.options = hybridOptions;
+
+  const res = await apiFetch("/api/recommend", "POST", payload);
 
   if (res?.recommendations) {
-    renderGrid(res.recommendations.slice(0, 3), "song-grid", true);
+    renderGrid(res.recommendations, "song-grid", true);
     document.getElementById("algo-badge").textContent = algo;
   }
 }
@@ -205,13 +288,16 @@ async function fetchUserRecommendations() {
   if (!algo) return alert("알고리즘을 먼저 선택해주세요.");
   if (!authUser) return alert("로그인 후 사용해주세요.");
 
-  const res = await apiFetch("/api/recommend/user", "POST", {
+  const payload = {
     username: authUser.username,
     algorithm: algo,
-    top_k: 3,
-  });
+    top_k: HOME_RECO_TOP_K,
+  };
+  if (isHybridAlgo(algo)) payload.options = hybridOptions;
+
+  const res = await apiFetch("/api/recommend/user", "POST", payload);
   if (res?.recommendations) {
-    renderGrid(res.recommendations.slice(0, 3), "song-grid", true);
+    renderGrid(res.recommendations, "song-grid", true);
     document.getElementById("algo-badge").textContent = `${algo} · ${authUser.username}`;
   }
 }
@@ -228,18 +314,21 @@ async function onSearch() {
     return;
   }
 
-  const res = await apiFetch("/api/search", "POST", {
-    query, algorithm: algo, top_k: 3,
-  });
+  const payload = { query, algorithm: algo, top_k: SEARCH_TOP_K };
+  if (isHybridAlgo(algo)) payload.options = hybridSearchPayload();
+
+  const res = await apiFetch("/api/search", "POST", payload);
 
   const block = document.getElementById("search-results-block");
   const container = document.getElementById("search-result");
   block.removeAttribute("hidden");
 
   if (res?.recommendations?.length) {
-    renderGrid(res.recommendations.slice(0, 3), "search-result", true);
+    setHomePreviewSearchHint();
+    renderGrid(res.recommendations, "search-result", true);
   } else {
-    container.innerHTML = "<p class='placeholder'>검색 결과가 없거나 이 알고리즘은 자연어 검색을 지원하지 않습니다.</p>";
+    container.innerHTML =
+      "<p class='placeholder'>검색 결과가 없거나 이 알고리즘은 자연어 검색을 지원하지 않습니다. (API 오류면 콘솔·네트워크 탭을 확인해 주세요.)</p>";
   }
 
   block.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -295,10 +384,68 @@ function onLikePlayer() {
   }
 }
 
+function setEmbedPanelMinimized(on) {
+  embedPanelMinimized = !!on;
+  const wrap = document.getElementById("player-embed-wrap");
+  const minBtn = document.getElementById("btn-embed-minimize");
+  wrap?.classList.toggle("player-embed-panel--minimized", embedPanelMinimized);
+  if (minBtn) {
+    minBtn.textContent = embedPanelMinimized ? "확대" : "축소";
+    minBtn.setAttribute("aria-pressed", embedPanelMinimized ? "true" : "false");
+    minBtn.title = embedPanelMinimized
+      ? "메인 영역에서 크게 보기"
+      : "사이드바 쪽 작은 패널로 보기";
+  }
+}
+
+function toggleEmbedPanelMinimize() {
+  setEmbedPanelMinimized(!embedPanelMinimized);
+}
+
+function closeEmbedPanel() {
+  embedPanelDismissed = true;
+  setEmbedPanelMinimized(false);
+  document.getElementById("player-embed-wrap")?.setAttribute("hidden", "");
+  try {
+    ytPlayer?.pauseVideo?.();
+  } catch (_) {
+    /* noop */
+  }
+}
+
+function syncHybridEmbedChrome() {
+  const wrap = document.getElementById("player-embed-wrap");
+  const btn = document.getElementById("btn-youtube");
+  if (!btn) return;
+  if (!isHybridAlgo(currentAlgo())) {
+    embedPanelDismissed = false;
+    setEmbedPanelMinimized(false);
+    wrap?.setAttribute("hidden", "");
+    ytPendingLoadId = null;
+    ytEmbedLoadedId = null;
+    try {
+      ytPlayer?.pauseVideo?.();
+    } catch (_) {
+      /* noop */
+    }
+    btn.textContent = "▶ YouTube에서 듣기";
+    btn.title = "";
+    return;
+  }
+  btn.textContent = "▶ 내장 플레이어에서 듣기";
+  btn.title =
+    "내장 플레이어 패널을 열고 YouTube iframe에서 재생합니다 (재생 시간 기록). 패널을 닫았다면 이 버튼으로 다시 열 수 있어요.";
+}
+
 function openYoutube() {
   if (!currentSong) return;
-  logInteraction(currentSong.song_id, "play", 30);
-  window.open(currentSong.youtube_url, "_blank");
+  const algo = currentAlgo();
+  if (isHybridAlgo(algo)) {
+    playInsideIframe(currentSong);
+  } else {
+    logInteraction(currentSong.song_id, "play", 30);
+    window.open(currentSong.youtube_url, "_blank");
+  }
 }
 
 // ── 렌더링 ────────────────────────────────────────────────
@@ -307,12 +454,15 @@ function renderGrid(songs, containerId, showScore) {
   const container = document.getElementById(containerId);
   container.innerHTML = "";
 
-  if (!songs.length) {
+  let list = Array.isArray(songs) ? songs : [];
+  if (showScore) list = sortByScoreDesc(list);
+
+  if (!list.length) {
     container.innerHTML = "<p class='placeholder'>곡이 없습니다.</p>";
     return;
   }
 
-  songs.forEach(song => {
+  list.forEach(song => {
     if (song?.song_id) songCache.set(song.song_id, song);
     const tpl = document.getElementById("song-card-tpl").content.cloneNode(true);
     const card = tpl.querySelector(".song-card");
@@ -404,6 +554,12 @@ function updatePlayer(song) {
   document.getElementById("btn-like-player").classList.toggle(
     "liked", likedSongs.has(song.song_id)
   );
+
+  syncHybridEmbedChrome();
+  if (song && isHybridAlgo(currentAlgo()) && !embedPanelDismissed) {
+    document.getElementById("player-embed-wrap")?.removeAttribute("hidden");
+    if (song.song_id !== ytEmbedLoadedId) playInsideIframe(song);
+  }
 }
 
 // ── 유틸 ──────────────────────────────────────────────────
@@ -422,4 +578,464 @@ async function apiFetch(url, method = "GET", body = null) {
     console.error("API 오류:", e);
     return null;
   }
+}
+
+function isHybridAlgo(algo) {
+  return !!algo && algo.startsWith("hybrid");
+}
+
+function loadYoutubeIframeAPI() {
+  if (window.YT && window.YT.Player) {
+    ytApiReady = true;
+    ensureYtPlayer();
+    return;
+  }
+  const tag = document.createElement("script"); 
+  tag.src = "https://www.youtube.com/iframe_api";
+  document.head.appendChild(tag);
+
+  window.onYouTubeIframeAPIReady = () => {
+    ytApiReady = true;
+    ensureYtPlayer();
+  };
+}
+
+function ensureYtPlayer() {
+  if (!ytApiReady || ytPlayer) return;
+  const host = document.getElementById("yt-player");
+  if (!host) return;
+  ytPlayer = new YT.Player("yt-player", {
+    height: "360",
+    width: "640",
+    playerVars: {
+      rel: 0,
+      modestbranding: 1,
+      playsinline: 1,
+      origin: window.location.origin,
+    },
+    events: {
+      onStateChange: onYtStateChange,
+      onReady: () => {
+        if (ytPendingLoadId && ytPlayer?.loadVideoById) {
+          const id = ytPendingLoadId;
+          ytPlayer.loadVideoById(id);
+          ytPendingLoadId = null;
+          ytEmbedLoadedId = id;
+        }
+      },
+    },
+  });
+}
+
+function onYtStateChange(e) {
+  if (!ytCurrentSongId) return;
+  const PS = window.YT?.PlayerState;
+  if (!PS) return;
+
+  if (e.data === PS.PLAYING) {
+    ytPlayStartAt = Date.now();
+    if (ytHeartbeat) clearInterval(ytHeartbeat);
+    ytHeartbeat = setInterval(() => flushPlayProgress(false), 10000);
+  } else if (e.data === PS.PAUSED || e.data === PS.ENDED) {
+    flushPlayProgress(true);
+    if (ytHeartbeat) {
+      clearInterval(ytHeartbeat);
+      ytHeartbeat = null;
+    }
+  }
+}
+
+async function flushPlayProgress(forceSend) {
+  if (!ytCurrentSongId || !ytPlayStartAt) return;
+  const delta = Math.max(0, Math.floor((Date.now() - ytPlayStartAt) / 1000));
+  ytPlayStartAt = Date.now();
+  ytAccumulatedSec += delta;
+
+  if (forceSend || ytAccumulatedSec >= 10) {
+    await logInteraction(ytCurrentSongId, "play", ytAccumulatedSec);
+    ytAccumulatedSec = 0;
+  }
+}
+
+function playInsideIframe(song) {
+  if (!song?.song_id) return;
+  embedPanelDismissed = false;
+  document.getElementById("player-embed-wrap")?.removeAttribute("hidden");
+  ytCurrentSongId = song.song_id;
+  ytAccumulatedSec = 0;
+  ytPlayStartAt = null;
+
+  loadYoutubeIframeAPI();
+  if (!ytApiReady) {
+    ytPendingLoadId = song.song_id;
+    return;
+  }
+
+  ensureYtPlayer();
+  if (ytPlayer && typeof ytPlayer.loadVideoById === "function") {
+    try {
+      ytPlayer.loadVideoById(song.song_id);
+      ytPendingLoadId = null;
+      ytEmbedLoadedId = song.song_id;
+    } catch (_) {
+      ytPendingLoadId = song.song_id;
+    }
+  } else {
+    ytPendingLoadId = song.song_id;
+  }
+}
+
+// ── 하이브리드 모달 ───────────────────────────────────────
+
+function getSelectedHybridMode() {
+  const chip = document.querySelector("#hyb-mode-seg .hyb-mode-chip.is-active");
+  return chip?.dataset.hybMode || "advanced";
+}
+
+function setHybridModeUI(mode) {
+  document.querySelectorAll("#hyb-mode-seg .hyb-mode-chip").forEach((btn) => {
+    const on = btn.dataset.hybMode === mode;
+    btn.classList.toggle("is-active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+function onHybridModeSegClick(ev) {
+  const btn = ev.target.closest(".hyb-mode-chip");
+  if (!btn || !document.getElementById("hyb-mode-seg").contains(btn)) return;
+  setHybridModeUI(btn.dataset.hybMode);
+}
+
+function updateHybridBalanceUI() {
+  const el = document.getElementById("hyb-balance");
+  const c = Math.min(100, Math.max(0, Number(el.value)));
+  const co = 100 - c;
+  document.getElementById("hyb-balance-pct-content").textContent = String(c);
+  document.getElementById("hyb-balance-pct-cooc").textContent = String(co);
+  el.setAttribute("aria-valuetext", `오디오 ${c}%, 협업 ${co}%`);
+  const track = el.closest(".hyb-range-track--balance");
+  if (track) track.style.setProperty("--balance", `${c}%`);
+}
+
+function updateHybridThresholdUI() {
+  const el = document.getElementById("hyb-threshold");
+  const raw = Math.min(100, Math.max(0, Number(el.value)));
+  const v = raw / 100;
+  document.getElementById("hyb-threshold-readout").textContent = v.toFixed(2);
+}
+
+function openHybridModal() {
+  const w = hybridOptions.weights || { content: 0.55, cooc: 0.45 };
+  const bc = Math.round((Number(w.content) || 0) * 100);
+  setHybridModeUI(hybridOptions.mode || "advanced");
+
+  const bal = document.getElementById("hyb-balance");
+  bal.value = String(Math.min(100, Math.max(0, bc)));
+  updateHybridBalanceUI();
+
+  const th = Math.round((Number(hybridOptions.threshold) || 0) * 100);
+  document.getElementById("hyb-threshold").value = String(Math.min(100, Math.max(0, th)));
+  updateHybridThresholdUI();
+
+  document.getElementById("hyb-use-llm-search").checked = !!hybridOptions.use_llm_search;
+
+  document.getElementById("hybrid-modal").classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function closeHybridModal() {
+  document.getElementById("hybrid-modal").classList.add("hidden");
+  if (!document.getElementById("eval-modal")?.classList.contains("hidden")) return;
+  document.body.style.overflow = "";
+}
+
+function saveHybridOptions() {
+  const balance = Math.min(100, Math.max(0, Number(document.getElementById("hyb-balance").value)));
+  hybridOptions = {
+    mode: getSelectedHybridMode(),
+    weights: {
+      content: balance / 100,
+      cooc: (100 - balance) / 100,
+    },
+    threshold: Math.min(1, Math.max(0, Number(document.getElementById("hyb-threshold").value) / 100)),
+    use_llm_search: document.getElementById("hyb-use-llm-search").checked,
+  };
+  closeHybridModal();
+}
+
+function onModalEscape(ev) {
+  if (ev.key !== "Escape") return;
+  const hyb = document.getElementById("hybrid-modal");
+  const eva = document.getElementById("eval-modal");
+  if (hyb && !hyb.classList.contains("hidden")) {
+    closeHybridModal();
+    return;
+  }
+  if (eva && !eva.classList.contains("hidden")) {
+    closeEvalModal();
+  }
+}
+
+// 평가 모달 + 표/차트
+function openEvalModal() {
+  document.getElementById("eval-modal").classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+function closeEvalModal() {
+  document.getElementById("eval-modal").classList.add("hidden");
+  renderEvalRunInfo(null);
+  if (!document.getElementById("hybrid-modal")?.classList.contains("hidden")) return;
+  document.body.style.overflow = "";
+}
+
+const EVAL_COL_LABELS = {
+  weight_audio_pct: "설정·오디오%",
+  weight_cooc_pct: "설정·협업%",
+  threshold: "설정·임계값",
+  variant_mode: "조합·공동출현",
+  variant_use_llm_search: "조합·LLM검색",
+  variant: "평가방식",
+  n_cases: "케이스수",
+  user_id: "user_id",
+  query_song_id: "쿼리곡ID",
+  query_title: "쿼리곡",
+  query_artist: "쿼리아티스트",
+  n_relevant: "정답곡수",
+};
+
+function evalColTitle(key) {
+  return EVAL_COL_LABELS[key] || key;
+}
+
+function escapeHtmlEval(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function formatEvalWeightsLine(w) {
+  if (!w || typeof w !== "object") return "";
+  const a = Math.round(Number(w.content ?? 0) * 100);
+  const b = Math.round(Number(w.cooc ?? 0) * 100);
+  return `오디오 ${a}% · 협업 ${b}%`;
+}
+
+function renderEvalRunInfo(res) {
+  const el = document.getElementById("eval-run-info");
+  if (!el) return;
+  if (!res) {
+    el.innerHTML = "";
+    el.setAttribute("hidden", "");
+    return;
+  }
+  const algo = res.algorithm || "";
+  const kList = (res.k_list || []).join(", ");
+  const snap = res.hybrid_sidebar_snapshot;
+  const blocks = [];
+
+  if (snap && isHybridAlgo(algo)) {
+    const modeLabel =
+      snap.mode === "simple"
+        ? "Simple"
+        : snap.mode === "advanced"
+          ? "Advanced"
+          : String(snap.mode || "—");
+    const wline = formatEvalWeightsLine(snap.weights);
+    const th = snap.threshold != null ? Number(snap.threshold) : 0;
+    const llm =
+      snap.use_llm_search === true
+        ? "자연어 검색 시 LLM: 켜짐"
+        : "자연어 검색 시 LLM: 꺼짐";
+    blocks.push(
+      `<p class="eval-run-info__strong">하이브리드 설정 <span class="eval-run-info__muted">(사이드바·모달에 저장된 값)</span></p>`,
+      `<p class="eval-run-info__line">공동출현 모드: <strong>${escapeHtmlEval(modeLabel)}</strong> · 가중치: <strong>${escapeHtmlEval(wline || "—")}</strong> · threshold: <strong>${escapeHtmlEval(String(th))}</strong></p>`,
+      `<p class="eval-run-info__line">${escapeHtmlEval(llm)}</p>`
+    );
+    if (res.mode === "variants") {
+      blocks.push(
+        `<p class="eval-run-info__note">표·차트는 <strong>네 조합</strong>(Simple/Advanced × LLM on/off)마다 계산했고, 가중치·threshold·위 LLM 스위치는 <strong>요청 시점 저장값</strong>이 각 조합에 함께 넘어갑니다. 평가는 <strong>곡 기반 recommend()</strong>만 쓰므로, 추천 경로에서 LLM이 안 쓰이면 조합별 수치가 같을 수 있습니다.</p>`
+      );
+    } else {
+      blocks.push(
+        `<p class="eval-run-info__note">단일 평가(run_variants=false)입니다. 표의 조합 열은 위 저장 설정과 같습니다.</p>`
+      );
+    }
+  } else {
+    blocks.push(
+      `<p class="eval-run-info__line">알고리즘: <strong>${escapeHtmlEval(algo)}</strong> · K: ${escapeHtmlEval(kList)}</p>`
+    );
+  }
+
+  el.innerHTML = blocks.join("");
+  el.removeAttribute("hidden");
+}
+
+async function runEvaluation() {
+  const algo = currentAlgo();
+  const body = {
+    algorithm: algo,
+    options: isHybridAlgo(algo) ? hybridOptions : {},
+  };
+  const res = await apiFetch("/api/eval/run", "POST", body);
+  if (!res) return alert("평가 실패");
+
+  renderEvalRunInfo(res);
+  renderEvalTable(res.rows || [], res.summary_rows || []);
+  renderEvalChart(res.summary || {});
+}
+
+function _fmtEvalCell(v, col) {
+  if (col === "variant_use_llm_search") {
+    if (v === true || v === "true") return "반영(on)";
+    if (v === false || v === "false") return "미반영(off)";
+  }
+  if (col === "variant_mode") {
+    if (v === "simple") return "Simple";
+    if (v === "advanced") return "Advanced";
+  }
+  if (v === null || v === undefined) return "";
+  if (typeof v === "number" && Number.isFinite(v)) return String(Math.round(v * 10000) / 10000);
+  return String(v);
+}
+
+function renderEvalTable(rows, summaryRows) {
+  const wrap = document.getElementById("eval-table-wrap");
+  if (rows.length) {
+    const cols = Object.keys(rows[0]);
+    const head = `<tr>${cols.map((c) => `<th>${escapeHtmlEval(evalColTitle(c))}</th>`).join("")}</tr>`;
+    const body = rows
+      .map(
+        (r) =>
+          `<tr>${cols.map((c) => `<td>${escapeHtmlEval(_fmtEvalCell(r[c], c))}</td>`).join("")}</tr>`
+      )
+      .join("");
+    wrap.innerHTML = `<p class="eval-subcap">케이스별 상세 · 앞쪽 열은 이번 실행에 쓴 가중치·임계값·조합(모드·LLM)</p><table class="eval-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+    return;
+  }
+
+  if (summaryRows && summaryRows.length) {
+    const cols = Object.keys(summaryRows[0]);
+    const head = `<tr>${cols.map((c) => `<th>${escapeHtmlEval(evalColTitle(c))}</th>`).join("")}</tr>`;
+    const body = summaryRows
+      .map(
+        (r) =>
+          `<tr>${cols.map((c) => `<td>${escapeHtmlEval(_fmtEvalCell(r[c], c))}</td>`).join("")}</tr>`
+      )
+      .join("");
+    const zero = summaryRows.every((r) => !r.n_cases);
+    const cap = zero
+      ? "<p class=\"eval-empty\">케이스별 표가 없습니다. 좋아요 2곡 이상 또는 재생 20초 이상인 곡 2곡 이상이 있는 유저가 필요합니다. 아래는 설정 변형별 요약입니다(n_cases 확인).</p>"
+      : "<p class=\"eval-subcap\">요약: 각 행 = 공동출현 모드 × LLM 옵션 · 앞 열은 설정·오디오%/협업%/임계값</p>";
+    wrap.innerHTML = `${cap}<table class="eval-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+    return;
+  }
+
+  wrap.innerHTML =
+    "<p class=\"eval-empty\">표 데이터가 없습니다. 알고리즘을 선택한 뒤 다시 실행하거나 서버 오류를 확인하세요.</p>";
+}
+
+/** 평가 막대그래프 Y축(0~1) 눈금 옆 해석 — 대략적인 가이드 */
+function formatEvalYAxisTick(value) {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return String(value);
+  if (v <= 0.02) return "0\n(맞춤 거의 없음)";
+  if (Math.abs(v - 0.25) < 0.04) return "0.25\n(미흡)";
+  if (Math.abs(v - 0.5) < 0.04) return "0.5\n(보통)";
+  if (Math.abs(v - 0.75) < 0.04) return "0.75\n(양호)";
+  if (v >= 0.97) return "1.0\n(매우 좋음)";
+  return v.toFixed(2);
+}
+
+const evalChartScales = {
+  x: {
+    ticks: { maxRotation: 45, minRotation: 45, font: { size: 9 } },
+  },
+  y: {
+    min: 0,
+    max: 1,
+    ticks: {
+      stepSize: 0.25,
+      callback: (value) => formatEvalYAxisTick(value),
+      font: { size: 10, lineHeight: 1.25 },
+      maxRotation: 0,
+      autoSkip: false,
+    },
+    title: {
+      display: true,
+      text: "지표 값 (0 = 최악, 1 = 이상적)",
+      color: "#9a9a9a",
+      font: { size: 11 },
+    },
+    grid: { color: "rgba(255,255,255,0.06)" },
+  },
+};
+
+const evalChartLayout = {
+  padding: { left: 4, right: 8, top: 4, bottom: 4 },
+};
+
+let evalChart;
+function renderEvalChart(summary) {
+  const ctx = document.getElementById("eval-chart");
+  if (evalChart) {
+    evalChart.destroy();
+    evalChart = null;
+  }
+  const labels = Object.keys(summary || {});
+  const data = Object.values(summary || {});
+  if (!labels.length) {
+    if (typeof Chart === "undefined") return;
+    evalChart = new Chart(ctx, {
+      type: "bar",
+      data: { labels: ["(데이터 없음)"], datasets: [{ label: "지표", data: [0], backgroundColor: "#333" }] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: evalChartLayout,
+        scales: evalChartScales,
+      },
+    });
+    return;
+  }
+  evalChart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "지표",
+          data,
+          backgroundColor: "rgba(29, 185, 84, 0.55)",
+          borderColor: "rgba(29, 185, 84, 0.9)",
+          borderWidth: 1,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: evalChartLayout,
+      scales: evalChartScales,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label(ctx) {
+              const raw = ctx.raw;
+              const n = typeof raw === "number" ? raw : parseFloat(raw);
+              if (!Number.isFinite(n)) return String(raw);
+              let hint = "";
+              if (n < 0.2) hint = " — 맞춤 거의 없음";
+              else if (n < 0.4) hint = " — 다소 미흡";
+              else if (n < 0.6) hint = " — 보통 수준";
+              else if (n < 0.8) hint = " — 양호";
+              else hint = " — 매우 좋음";
+              return ` ${n.toFixed(4)}${hint}`;
+            },
+          },
+        },
+      },
+    },
+  });
 }
