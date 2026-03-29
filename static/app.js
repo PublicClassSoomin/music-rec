@@ -855,7 +855,7 @@ function renderEvalRunInfo(res) {
     );
     if (res.mode === "variants") {
       blocks.push(
-        `<p class="eval-run-info__note">표·차트는 <strong>네 조합</strong>(Simple/Advanced × LLM on/off)마다 계산했고, 가중치·threshold·위 LLM 스위치는 <strong>요청 시점 저장값</strong>이 각 조합에 함께 넘어갑니다. 평가는 <strong>곡 기반 recommend()</strong>만 쓰므로, 추천 경로에서 LLM이 안 쓰이면 조합별 수치가 같을 수 있습니다.</p>`
+        `<p class="eval-run-info__note">표·차트는 <strong>네 조합</strong>(Simple/Advanced × LLM on/off)마다 계산했고, 가중치·threshold·LLM 스위치는 <strong>요청 시점 저장값</strong>이 <code>recommend_with_options</code>에 넘어갑니다. 시드 곡 메타로 텍스트 검색이 합성되므로 LLM on/off에 따라 수치가 달라질 수 있고, Gemini 미설정·동일 확장이면 같을 수 있습니다.</p>`
       );
     } else {
       blocks.push(

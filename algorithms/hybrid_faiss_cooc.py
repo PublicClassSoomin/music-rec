@@ -27,6 +27,8 @@ API 연동 (api/main.py)
     - weights: {"content": float, "cooc": float} — 요청 한 번에만 적용 후 복구
     - threshold: float — 하이브리드 합산 점수 하한 (이하면 제외)
     - filters: {"genre": str} 등 — 구현된 키만 필터링 (선택)
+    - 아래 검색 관련 키가 하나라도 있으면 시드 곡 메타(제목·가수·장르)로 질의를 만들어
+      search_with_options 를 돌리고, 하이브리드 점수와 합성한다 (use_llm_search 가 평가에 반영됨).
 
 검색 options — 상세 의미·기본값은 text_search_embed_llm.py 주석 참고.
     - use_full_embedding_search, use_embedding_rerank, use_llm_search,
@@ -59,6 +61,18 @@ from data.database import (
     get_distinct_interaction_user_ids,
     get_user_liked_song_ids,
 )
+
+# recommend_with_options: 시드 메타→텍스트 검색 블렌딩 (이 키가 options 에 하나라도 있을 때)
+_SEARCH_OPTION_KEYS_FOR_RECOMMEND = frozenset({
+    "use_llm_search",
+    "use_full_embedding_search",
+    "use_embedding_rerank",
+    "search_candidate_multiplier",
+    "min_token_score",
+    "require_keyword_match",
+    "llm_max_keywords",
+})
+_RECOMMEND_SEED_TEXT_BLEND = 0.35  # (1-α)·하이브리드 + α·시드 질의 검색(정규화)
 
 # ------------------------------------------------------------------------------
 # 유틸 함수
@@ -385,6 +399,55 @@ class HybridFaissCoocRecommender(BaseRecommender, _HybridMixer):
         self._text_searcher.fit(data if data is not None else pd.DataFrame())
         self.is_fitted = True
 
+    def _seed_query_from_song_id(self, song_id: str) -> str:
+        """시드 곡의 제목·가수·장르로 검색 질의 문자열을 만든다."""
+        df = self._data
+        if df is None or df.empty or "song_id" not in df.columns:
+            return ""
+        mask = df["song_id"].astype(str) == str(song_id)
+        if not mask.any():
+            return ""
+        row = df.loc[mask].iloc[0]
+        parts = [
+            str(row.get("title") or "").strip(),
+            str(row.get("artist") or "").strip(),
+            str(row.get("genre") or "").strip(),
+        ]
+        return " ".join(p for p in parts if p)
+
+    def _merge_hybrid_with_seed_text_search(
+        self,
+        song_id: str,
+        hybrid_scores: dict[str, float],
+        pool_size: int,
+        top_k: int,
+        opts: dict[str, Any],
+    ) -> dict[str, float]:
+        """
+        options 에 검색 파이프라인 키가 있으면 시드 메타 질의로 search_with_options 호출 후 합성.
+        recommend() 의 빈 options 는 블렌딩하지 않는다.
+        """
+        if not opts or not any(k in opts for k in _SEARCH_OPTION_KEYS_FOR_RECOMMEND):
+            return hybrid_scores
+        q = self._seed_query_from_song_id(song_id)
+        if not q.strip():
+            return hybrid_scores
+        search_cap = max(pool_size, top_k * 8, 48)
+        try:
+            text_raw = self._text_searcher.search_with_options(q, search_cap, opts)
+        except Exception:
+            return hybrid_scores
+        if not text_raw:
+            return hybrid_scores
+        text_n = _min_max_normalize(text_raw)
+        alpha = _RECOMMEND_SEED_TEXT_BLEND
+        keys = set(hybrid_scores) | set(text_n)
+        return {
+            sid: (1.0 - alpha) * float(hybrid_scores.get(sid, 0.0))
+            + alpha * float(text_n.get(sid, 0.0))
+            for sid in keys
+        }
+
     def recommend(self, song_id: str, top_k: int = 10) -> dict[str, float]:
         return self.recommend_with_options(song_id, top_k, {})
 
@@ -397,6 +460,7 @@ class HybridFaissCoocRecommender(BaseRecommender, _HybridMixer):
         """
         mode 로 simple/advanced cooc 그래프 선택.
         weights 가 오면 해당 요청에만 임시로 반영하고 끝나면 기본값으로 복구한다.
+        검색 관련 options 키가 있으면 시드 메타 질의로 텍스트 검색 점수를 합성한다.
         """
         self._check_fitted()
         opts = options or {}
@@ -417,6 +481,9 @@ class HybridFaissCoocRecommender(BaseRecommender, _HybridMixer):
         try:
             pool_size = max(top_k * self._faiss_mult, top_k, 1)
             scores = self._hybrid_scores_for_seed(song_id, pool_size)
+            scores = self._merge_hybrid_with_seed_text_search(
+                song_id, scores, pool_size, top_k, opts
+            )
 
             th = float(opts.get("threshold", 0.0))
             if th > 0:

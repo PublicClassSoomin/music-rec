@@ -181,23 +181,25 @@
             <button type="button" class="modal-close-btn" id="eval-close-x" aria-label="닫기">×</button>
           </header>
           <div class="modal-card-body modal-card-body--flush">
-            <div class="eval-help">
-              <p class="eval-help-lead">
-                <strong>이 숫자의 의미</strong>는 “기준 곡 하나를 골랐을 때, 그 유저가 실제로 함께 들었던 곡(좋아요 또는 충분히 재생)이 추천 상위에 얼마나 올라왔는가”입니다.
-                모델을 추가로 <strong>학습(경사 하강)</strong>시키지는 않고, DB·오디오 특성·로그로 만든 인덱스로 점수만 계산합니다.
-              </p>
-              <ul class="eval-help-list">
-                <li><strong>Precision@K</strong> — 추천 상위 K곡 중 ‘맞은’ 곡 비율. 높을수록 좋음.</li>
-                <li><strong>Recall@K</strong> — 정답으로 두는 곡들 중, K 안에 들어온 비율.</li>
-                <li><strong>NDCG@K</strong> — 맞은 곡이 목록 <em>위쪽</em>에 올수록 더 높음 (순위 품질).</li>
-              </ul>
-              <p class="eval-help-note">표·차트가 비면 <strong>평가 케이스가 0</strong>입니다. 좋아요 2곡 이상이거나, 재생 20초 이상 기록이 2곡 이상 있는 유저가 있어야 케이스가 생깁니다.</p>
+            <div class="eval-modal-body-scroll">
+              <div class="eval-help">
+                <p class="eval-help-lead">
+                  <strong>이 숫자의 의미</strong>는 “기준 곡 하나를 골랐을 때, 그 유저가 실제로 함께 들었던 곡(좋아요 또는 충분히 재생)이 추천 상위에 얼마나 올라왔는가”입니다.
+                  모델을 추가로 <strong>학습(경사 하강)</strong>시키지는 않고, DB·오디오 특성·로그로 만든 인덱스로 점수만 계산합니다.
+                </p>
+                <ul class="eval-help-list">
+                  <li><strong>Precision@K</strong> — 추천 상위 K곡 중 ‘맞은’ 곡 비율. 높을수록 좋음.</li>
+                  <li><strong>Recall@K</strong> — 정답으로 두는 곡들 중, K 안에 들어온 비율.</li>
+                  <li><strong>NDCG@K</strong> — 맞은 곡이 목록 <em>위쪽</em>에 올수록 더 높음 (순위 품질).</li>
+                </ul>
+                <p class="eval-help-note">표·차트가 비면 <strong>평가 케이스가 0</strong>입니다. 좋아요 2곡 이상이거나, 재생 20초 이상 기록이 2곡 이상 있는 유저가 있어야 케이스가 생깁니다.</p>
+              </div>
+              <div id="eval-run-info" class="eval-run-info" hidden aria-live="polite"></div>
+              <div class="eval-chart-wrap">
+                <canvas id="eval-chart"></canvas>
+              </div>
+              <div id="eval-table-wrap" class="eval-table-wrap"></div>
             </div>
-            <div id="eval-run-info" class="eval-run-info" hidden aria-live="polite"></div>
-            <div class="eval-chart-wrap">
-              <canvas id="eval-chart"></canvas>
-            </div>
-            <div id="eval-table-wrap" class="eval-table-scroll"></div>
           </div>
           <footer class="modal-card-footer">
             <button id="eval-run-btn" class="auth-btn modal-footer-btn" type="button">평가 실행</button>

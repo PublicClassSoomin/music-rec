@@ -17,6 +17,23 @@ from evaluation.metrics import evaluate
 _METRIC_KEY_PREFIXES = ("Precision@", "Recall@", "NDCG@")
 
 
+def _metric_column_keys(sample_row: dict[str, Any]) -> list[str]:
+    return [k for k in sample_row if isinstance(k, str) and k.startswith(_METRIC_KEY_PREFIXES)]
+
+
+def _row_mean_all_eval_metrics(row: dict[str, Any], metric_cols: list[str]) -> float:
+    """Precision@K / Recall@K / NDCG@K 전부에 대한 산술평균 (정렬 키)."""
+    vals: list[float] = []
+    for m in metric_cols:
+        if m not in row:
+            continue
+        try:
+            vals.append(float(row[m]))
+        except (TypeError, ValueError):
+            continue
+    return float(np.mean(vals)) if vals else 0.0
+
+
 def hybrid_eval_weight_columns(base_options: dict[str, Any]) -> dict[str, Any]:
     """UI에서 넘긴 하이브리드 가중치·임계값을 표에 그대로 보여 줄 열."""
     if not base_options or "weights" not in base_options:
@@ -221,8 +238,12 @@ def run_offline_eval_for_algorithm(
         return {"rows": [], "summary": {}, "n_cases": 0}
 
     # 지표 컬럼 추출 (Precision@K, Recall@K, NDCG@K)
-    # startswith 에 튜플을 넘기면 접두사 중 하나라도 맞으면 True
-    metric_cols = [k for k in rows[0].keys() if k.startswith(_METRIC_KEY_PREFIXES)]
+    metric_cols = _metric_column_keys(rows[0])
+    rows.sort(
+        key=lambda r: _row_mean_all_eval_metrics(r, metric_cols),
+        reverse=True,
+    )
+
     # 평균 지표 계산
     summary = {
         m: float(np.mean([float(r[m]) for r in rows]))
@@ -303,6 +324,13 @@ def run_offline_eval_variants(
         for k, v in s.items():
             if isinstance(k, str) and k.startswith(_METRIC_KEY_PREFIXES):
                 summary_for_chart[f"{vmode}|llm={vllm}|{k}"] = float(v)
+
+    if rows:
+        mcols = _metric_column_keys(rows[0])
+        rows.sort(
+            key=lambda r: _row_mean_all_eval_metrics(r, mcols),
+            reverse=True,
+        )
 
     return {
         "rows": rows,
