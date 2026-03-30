@@ -113,20 +113,21 @@ distances = np.sqrt((df['x'] - target_x)**2 + (df['y'] - target_y)**2)
 df['dist'] = distances
 closest_indices = np.argsort(distances)
 
-# (3) 바구니 분류 및 색상 지정
-# - 기준 곡 (가장 가까운 1곡) -> 별
-base_song = df.iloc[closest_indices[0]]
-
-# - 추천될 3개의 점 (초록색)
-comfort_recs = df.iloc[closest_indices[1:4]] # 기준 곡 제외 top 3
-
-# - 근처였지만 추천되지 못한 7개의 빨간색 점 (Top 4~10)
-near_misses = df.iloc[closest_indices[4:11]] # 그 다음 7곡
-
-# 색상 상태 컬럼 추가
 df['status'] = 'Pool' # 기본값: 회색
-df.loc[comfort_recs.index, 'status'] = 'Recommended'
-df.loc[near_misses.index, 'status'] = 'Near Miss'
+
+# 2. 각 그룹의 인덱스를 파악하여 status를 업데이트합니다.
+base_song_idx = df.iloc[closest_indices[0]].name
+comfort_idx = df.iloc[closest_indices[1:4]].index
+near_miss_idx = df.iloc[closest_indices[4:11]].index
+
+df.loc[comfort_idx, 'status'] = 'Recommended'
+df.loc[near_miss_idx, 'status'] = 'Near Miss'
+df.loc[base_song_idx, 'status'] = 'Base Song'  # 기준 곡 상태 지정
+
+# 3. ⭐ status가 모두 반영된 후, 화면에 그릴 데이터를 최종 추출합니다.
+base_song = df.loc[base_song_idx]
+comfort_recs = df.loc[comfort_idx]
+near_misses = df.loc[near_miss_idx]
 
 
 # ==========================================
@@ -228,7 +229,7 @@ with col_info:
     
     # 클릭 데이터가 있는지 확인
     # (click_data 구조: {'selection': {'point_indices': [...], 'points': [...]}, ...})
-    s = st.session_state.hex_map
+    s = st.session_state.get("hex_map", None)
     selected_song = None
 
     if s and 'selection' in s and s['selection']['points']:
