@@ -27,10 +27,11 @@ langgraph>=0.0.30
 # 벡터 검색
 faiss-cpu>=1.7.4
 
-# 딥러닝 (RL / BERT 선택자)
-torch>=2.0.0
-transformers>=4.35.0
-sentence-transformers>=2.2.0
+# 딥러닝 / 임베딩
+# transformers 5.4.x + 일부 환경에서 accelerate.py 타입힌트 NameError(nn) 발생 → 4.x 대역으로 고정
+torch>=2.0.0,<2.7
+transformers>=4.41.0,<5.0
+sentence-transformers>=3.3.0,<4.0
 
 # 협업 필터링 (SVD 선택자)
 # NOTE: scikit-surprise is not reliably buildable on some macOS environments.

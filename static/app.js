@@ -146,6 +146,9 @@ async function loadAlgorithms() {
     opt.textContent = algo;
     select.appendChild(opt);
   });
+  if (algos.includes("langgraph_scenario")) {
+    select.value = "langgraph_scenario";
+  }
   if (algos.length === 0) {
     hint.textContent =
       res?.notice ||

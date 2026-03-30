@@ -24,6 +24,7 @@ env/
 *.sqlite3
 data/*.index
 data/*.npy
+data/song_text_emb_meta.json
 
 # Runtime/generated folders
 temp_audio/

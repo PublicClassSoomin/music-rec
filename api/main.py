@@ -27,6 +27,24 @@ async def startup():
     song_df = get_all_songs()
     print(f"[API] {len(song_df)}곡 로드 완료")
 
+    # LangGraph + 경량 텍스트 임베딩 시나리오 검색 (torch + sentence-transformers 필요)
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        print(
+            "[API] langgraph_scenario 등록 생략: torch 미설치. "
+            "해결: pip install torch sentence-transformers  또는  pip install -r requirements.txt 후 서버 재시작"
+        )
+    else:
+        try:
+            from algorithms.langgraph_scenario import LangGraphScenarioRecommender
+
+            recommenders["langgraph_scenario"] = LangGraphScenarioRecommender()
+            recommenders["langgraph_scenario"].fit(song_df)
+            print("[API] 알고리즘 등록: langgraph_scenario (시나리오 자연어 검색)")
+        except Exception as e:
+            print(f"[API] langgraph_scenario 등록 실패: {e}")
+
     # FAISS 인덱스: 이 블록 안의 지역 변수 faiss_index를 알고리즘 생성 시 그대로 넘깁니다.
     # 다른 함수로 분리할 경우 faiss_index를 인자로 전달하거나 모듈 전역에 보관하세요.
     faiss_index = None
@@ -44,6 +62,11 @@ async def startup():
         recommenders["faiss_cbf"] = FaissContentRecommender(faiss_index)
         recommenders["faiss_cbf"].fit(song_df)
         print("[API] 샘플 알고리즘 등록: faiss_cbf")
+
+        lg = recommenders.get("langgraph_scenario")
+        if lg is not None and hasattr(lg, "bind_audio_faiss"):
+            lg.bind_audio_faiss(faiss_index)
+            print("[API] langgraph_scenario ← FAISS 오디오 이웃 연결")
 
     # ── 팀원 추가 등록 예시 (같은 startup() 안에서 faiss_index 사용) ──
     # from algorithms.my_algo import MyRecommender

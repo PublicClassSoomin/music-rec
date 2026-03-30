@@ -64,6 +64,12 @@ def init_db():
     if "password_hash" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
 
+    song_cols = [r["name"] for r in conn.execute("PRAGMA table_info(songs)").fetchall()]
+    if "lyrics" not in song_cols:
+        conn.execute("ALTER TABLE songs ADD COLUMN lyrics TEXT")
+    if "melon_song_id" not in song_cols:
+        conn.execute("ALTER TABLE songs ADD COLUMN melon_song_id TEXT")
+
     conn.commit()
     conn.close()
     print(f"[DB] 초기화 완료: {DB_PATH}")
@@ -73,15 +79,39 @@ def init_db():
 
 def upsert_song(song: dict):
     conn = get_conn()
+    payload = {
+        "song_id": song["song_id"],
+        "title": song["title"],
+        "artist": song.get("artist"),
+        "youtube_url": song.get("youtube_url"),
+        "thumbnail_url": song.get("thumbnail_url"),
+        "genre": song.get("genre"),
+        "duration": song.get("duration", 0),
+        "collected_at": song.get("collected_at"),
+        "lyrics": song.get("lyrics"),
+        "melon_song_id": song.get("melon_song_id"),
+    }
     conn.execute("""
         INSERT INTO songs (song_id, title, artist, youtube_url,
-                           thumbnail_url, genre, duration, collected_at)
+                           thumbnail_url, genre, duration, collected_at,
+                           lyrics, melon_song_id)
         VALUES (:song_id, :title, :artist, :youtube_url,
-                :thumbnail_url, :genre, :duration, :collected_at)
+                :thumbnail_url, :genre, :duration, :collected_at,
+                :lyrics, :melon_song_id)
         ON CONFLICT(song_id) DO UPDATE SET
-            title         = excluded.title,
-            collected_at  = excluded.collected_at
-    """, song)
+            title           = excluded.title,
+            artist          = excluded.artist,
+            youtube_url     = excluded.youtube_url,
+            thumbnail_url   = COALESCE(excluded.thumbnail_url, songs.thumbnail_url),
+            genre           = COALESCE(excluded.genre, songs.genre),
+            duration        = CASE WHEN excluded.duration IS NOT NULL AND excluded.duration > 0
+                                   THEN excluded.duration ELSE songs.duration END,
+            collected_at    = excluded.collected_at,
+            melon_song_id   = COALESCE(excluded.melon_song_id, songs.melon_song_id),
+            lyrics          = CASE WHEN excluded.lyrics IS NOT NULL
+                                        AND length(trim(excluded.lyrics)) > 15
+                                   THEN excluded.lyrics ELSE songs.lyrics END
+    """, payload)
     conn.commit()
     conn.close()
 
