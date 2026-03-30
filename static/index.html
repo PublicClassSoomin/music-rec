@@ -43,8 +43,9 @@
     </div>
 
     <!-- 설정 및 표보기 버튼 -->
-    <div class="sidebar-section">
+    <div class="sidebar-section sidebar-section--stack">
       <button id="hybrid-config-btn" class="auth-btn ghost" type="button">하이브리드 설정</button>
+      <button id="eval-settings-btn" class="auth-btn ghost" type="button">평가 옵션</button>
       <button id="eval-open-btn" class="auth-btn ghost" type="button">표보기</button>
     </div>
 
@@ -168,6 +169,74 @@
       </div>
     </div>
 
+    <!-- 평가 옵션 모달 (검색어/기준곡/범위 — 하이브리드 가중치와 분리) -->
+    <div id="eval-settings-modal" class="modal modal--eval-settings hidden" role="dialog" aria-modal="true" aria-labelledby="eval-settings-modal-title">
+      <div class="modal-backdrop" data-modal-dismiss="eval-settings-modal" aria-hidden="true"></div>
+      <div class="modal-shell modal-shell--eval-settings">
+        <div class="modal-card">
+          <header class="modal-card-header">
+            <div>
+              <h3 id="eval-settings-modal-title">평가 옵션</h3>
+              <p class="modal-card-sub">무엇을 기준으로 오프라인 지표를 낼지 고릅니다. 하이브리드 가중치·threshold는 <strong>하이브리드 설정</strong>과 동일하게 쓰입니다.</p>
+            </div>
+            <button type="button" class="modal-close-btn" id="eval-settings-close-x" aria-label="닫기">×</button>
+          </header>
+          <div class="modal-card-body">
+            <fieldset class="eval-mode-fieldset">
+              <legend class="eval-mode-legend">무엇을 기준으로 평가할까요?</legend>
+
+              <div class="eval-mode-card">
+                <label class="eval-opt-label eval-opt-label--block">
+                  <input type="radio" name="eval-settings-eval-mode" id="eval-settings-mode-search" value="search" checked />
+                  <span class="eval-mode-card-title"><strong>검색어</strong> <span class="eval-opt-field__muted">(기본)</span></span>
+                </label>
+                <p class="eval-mode-card-desc">문장으로 검색한 결과가 내 좋아요를 상위에 얼마나 올리는지 봅니다.</p>
+                <div id="eval-settings-panel-search" class="eval-panel-nested">
+                  <label class="eval-seed-label-strong" for="eval-settings-search-query">검색에 쓸 문장</label>
+                  <input
+                    type="text"
+                    id="eval-settings-search-query"
+                    class="eval-search-query-input"
+                    placeholder="비어 있으면 표보기 실행 시 검색창과 동일"
+                    autocomplete="off"
+                  />
+                </div>
+              </div>
+
+              <div class="eval-mode-card">
+                <label class="eval-opt-label eval-opt-label--block">
+                  <input type="radio" name="eval-settings-eval-mode" id="eval-settings-mode-recommend" value="recommend" />
+                  <span class="eval-mode-card-title"><strong>기준곡 1곡</strong> <span class="eval-opt-field__muted">(추천 leave-one-out)</span></span>
+                </label>
+                <p class="eval-mode-card-desc">
+                  <strong>아래 목록에서 시드(쿼리) 곡을 고릅니다.</strong> 안 고르면 DB의 모든 유저·시드 조합으로 평가합니다.
+                </p>
+                <div id="eval-settings-panel-recommend" class="eval-panel-nested" hidden>
+                  <label class="eval-seed-label-strong" for="eval-settings-seed-song-id">기준곡 선택</label>
+                  <select id="eval-settings-seed-song-id" class="eval-seed-select" aria-describedby="eval-settings-seed-hint-login">
+                    <option value="">선택 안 함 — 모든 시드·유저 조합으로 평가</option>
+                  </select>
+                  <p id="eval-settings-seed-hint-login" class="eval-seed-inline-hint" hidden>
+                    로그인하면 내 좋아요가 목록에 나타납니다.
+                  </p>
+                </div>
+              </div>
+            </fieldset>
+
+            <label class="eval-opt-label">
+              <input type="checkbox" id="eval-settings-only-current-user" />
+              현재 로그인 계정만 평가 대상으로 제한
+            </label>
+            <p class="eval-opt-hint">검색 평가는 <strong>hybrid_faiss_cooc</strong>처럼 검색 API를 지원하는 알고리즘에서만 됩니다. 적용을 누르면 설정이 브라우저에 저장됩니다.</p>
+          </div>
+          <footer class="modal-card-footer">
+            <button id="eval-settings-cancel-btn" class="auth-btn ghost modal-footer-btn" type="button">취소</button>
+            <button id="eval-settings-save-btn" class="auth-btn modal-footer-btn" type="button">적용</button>
+          </footer>
+        </div>
+      </div>
+    </div>
+
     <!-- 평가 결과 모달 -->
     <div id="eval-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="eval-modal-title">
       <div class="modal-backdrop" data-modal-dismiss="eval-modal" aria-hidden="true"></div>
@@ -184,18 +253,19 @@
             <div class="eval-modal-body-scroll">
               <div class="eval-help">
                 <p class="eval-help-lead">
-                  <strong>곡 기반 표</strong>는 “한 유저의 좋아요·재생 로그에서 기준 곡 하나를 뽑았을 때, 나머지가 함께 들은 곡이 <code>recommend</code> 상위에 얼마나 오르는가”입니다.
-                  네 조합(Simple/Advanced × LLM on/off)은 하이브리드 알고리즘에 적용됩니다.
+                  <strong>검색어(기본)</strong>: 아래에 적은 문장으로 검색한 뒤, 정답은 유저별 <strong>내 좋아요 전체</strong>입니다. 표의 <strong>검색어</strong> 열에 그 문장이 그대로 나옵니다.
+                  <strong>기준곡 1곡</strong>: 아래 <strong>기준곡 선택</strong>에서 곡을 고릅니다. 그 곡이 시드가 되어 <code>recommend</code> 상위에 다른 좋아요·재생 곡이 얼마나 오르는지(leave-one-out) 봅니다. 표에 <strong>기준곡 제목·아티스트</strong>가 나옵니다. 선택을 비우면 DB에 있는 모든 (유저·시드) 조합으로 돌립니다.
+                  하이브리드일 때 네 조합(Simple/Advanced × LLM)이 옵션에 반영됩니다.
                 </p>
                 <ul class="eval-help-list">
-                  <li><strong>Precision@K</strong> — 추천 상위 K곡 중 ‘맞은’ 곡 비율. 높을수록 좋음.</li>
-                  <li><strong>Recall@K</strong> — 정답으로 두는 곡들 중, K 안에 들어온 비율.</li>
-                  <li><strong>NDCG@K</strong> — 맞은 곡이 목록 <em>위쪽</em>에 올수록 더 높음 (순위 품질).</li>
+                  <li><strong>Precision@K</strong> — 상위 K곡 중 정답(좋아요 등)에 속한 비율.</li>
+                  <li><strong>Recall@K</strong> — 정답 집합 중 K 안에 들어온 비율.</li>
+                  <li><strong>NDCG@K</strong> — 정답이 목록 <em>위쪽</em>일수록 높음.</li>
                 </ul>
-                <p class="eval-help-note">곡 기반 케이스가 비면 해당 유저(또는 전체 DB)에 <strong>좋아요 2곡 이상</strong> 또는 <strong>재생 20초 이상 2곡 이상</strong> 기록이 없는 것입니다.</p>
+                <p class="eval-help-note">검색 평가는 좋아요 <strong>1곡 이상</strong>인 유저마다 표에 한 줄씩입니다. 기준곡 평가에서 곡을 고르면 <strong>그 곡만</strong> 시드로 쓰고(「현재 계정만」이면 나머지 좋아요가 정답), 안 고르면 여러 시드·유저가 한꺼번에 평가됩니다. <strong>평가 옵션</strong>은 사이드바에서 따로 엽니다.</p>
               </div>
               <div id="eval-run-info" class="eval-run-info" hidden aria-live="polite"></div>
-              <p id="eval-chart-caption-recommend" class="eval-chart-caption">곡 기반 추천 (leave-one-out)</p>
+              <p id="eval-chart-caption-recommend" class="eval-chart-caption">오프라인 평가</p>
               <div class="eval-chart-wrap">
                 <canvas id="eval-chart"></canvas>
               </div>
@@ -203,14 +273,9 @@
             </div>
           </div>
           <footer class="modal-card-footer modal-card-footer--eval">
-            <div class="eval-footer-options">
-              <label class="eval-opt-label">
-                <input type="checkbox" id="eval-only-current-user" />
-                현재 로그인 계정만 곡 기반 평가
-              </label>
-              <p class="eval-opt-hint">
-                체크 시 <strong>내 계정</strong> leave-one-out만, 해제 시 <strong>DB 전 유저</strong> 풀을 씁니다. 두 풀이 같으면(평가 케이스를 만드는 유저가 나뿐이면) 숫자가 동일하게 나옵니다.
-              </p>
+            <div class="eval-footer-options eval-footer-options--compact">
+              <p id="eval-current-settings-summary" class="eval-current-settings-summary" aria-live="polite"></p>
+              <button type="button" id="eval-edit-settings-btn" class="auth-btn ghost eval-edit-settings-btn">평가 옵션…</button>
             </div>
             <div class="eval-footer-actions">
               <button id="eval-run-btn" class="auth-btn modal-footer-btn" type="button">평가 실행</button>

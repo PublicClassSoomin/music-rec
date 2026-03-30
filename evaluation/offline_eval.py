@@ -34,8 +34,18 @@ _EVAL_REQUEST_META_KEYS = frozenset(
         "run_variants",
         "max_cases",
         "k_list",
+        "eval_mode",
+        "search_eval_query",
+        "eval_seed_song_id",
     }
 )
+
+
+def normalize_eval_mode(options: dict[str, Any] | None) -> str:
+    """기본값 search(검색어 기반). recommend 는 곡 leave-one-out."""
+    m = (options or {}).get("eval_mode", "search")
+    m = str(m).strip().lower()
+    return m if m in ("search", "recommend") else "search"
 
 
 def strip_eval_request_meta(options: dict[str, Any] | None) -> dict[str, Any]:
@@ -48,13 +58,54 @@ def eval_recommend_case_counts(
     max_cases: int,
     filter_user_id: int | None,
 ) -> dict[str, int]:
-    """UI 안내용: 전체 풀 / 필터 후 풀 / 실제 평가에 쓴 케이스 수."""
+    """UI 안내용: 곡 기반 leave-one-out 풀 / 필터 후 / 이번 실행 케이스 수."""
     pool_all = len(_build_eval_cases(0, None))
     if filter_user_id is not None:
         pool_f = len(_build_eval_cases(0, filter_user_id))
     else:
         pool_f = pool_all
     n_run = len(_build_eval_cases(max_cases, filter_user_id))
+    return {
+        "eval_recommend_pool_all_users": pool_all,
+        "eval_recommend_pool_filtered_user": pool_f,
+        "eval_recommend_cases_evaluated": n_run,
+    }
+
+
+def _build_search_eval_user_cases(
+    filter_user_id: int | None,
+    max_cases: int = 0,
+) -> list[tuple[int, list[str]]]:
+    """검색 평가: (user_id, relevant_like_ids). 좋아요 1곡 이상인 유저만."""
+    out: list[tuple[int, list[str]]] = []
+    if filter_user_id is not None:
+        uids = [int(filter_user_id)]
+    else:
+        uids = list(get_distinct_interaction_user_ids())
+
+    for uid in uids:
+        liked = [str(x) for x in get_user_liked_song_ids(uid) if x]
+        liked = list(dict.fromkeys(liked))
+        if len(liked) < 1:
+            continue
+        out.append((int(uid), liked))
+
+    if max_cases > 0:
+        out = out[:max_cases]
+    return out
+
+
+def eval_search_case_counts(
+    max_cases: int,
+    filter_user_id: int | None,
+) -> dict[str, int]:
+    """검색 평가용 풀 크기 (좋아요 1곡 이상 유저 수)."""
+    pool_all = len(_build_search_eval_user_cases(None, 0))
+    if filter_user_id is not None:
+        pool_f = len(_build_search_eval_user_cases(filter_user_id, 0))
+    else:
+        pool_f = pool_all
+    n_run = len(_build_search_eval_user_cases(filter_user_id, max_cases))
     return {
         "eval_recommend_pool_all_users": pool_all,
         "eval_recommend_pool_filtered_user": pool_f,
@@ -232,7 +283,21 @@ def _call_recommend(
         return algo.recommend_with_options(query_song_id, top_k, options)
     return algo.recommend(query_song_id, top_k)
 
-def run_offline_eval_for_algorithm(
+
+def _call_search(
+    algo: Any,
+    query: str,
+    top_k: int,
+    options: dict[str, Any] | None = None,
+) -> dict[str, float]:
+    if hasattr(algo, "search_by_query_with_options"):
+        return algo.search_by_query_with_options(query, top_k, options or {})
+    if hasattr(algo, "search_by_query"):
+        return algo.search_by_query(query, top_k)
+    return {}
+
+
+def _run_search_eval_for_algorithm(
     algo: Any,
     *,
     base_options: dict[str, Any] | None = None,
@@ -241,14 +306,85 @@ def run_offline_eval_for_algorithm(
     filter_user_id: int | None = None,
 ) -> dict[str, Any]:
     """
-    단일 알고리즘 오프라인 평가.
-    평가 케이스: (1) 좋아요 leave-one-out (2) 좋아요가 없으면 재생 로그(play, 최소 초) 기반.
-    결과:
-    {
-        "rows": [...케이스별 지표...], (문제별 채점 결과표)
-        "summary": {...평균 지표...}, (과목 평균 점수)
-        "n_cases": int (실제로 체점한 문제 수)
+    검색어 q에 대해 /search 와 동일 로직으로 순위를 얻고,
+    정답 = 해당 유저의 좋아요 전체 집합으로 Precision/Recall/NDCG.
+    """
+    if k_list is None:
+        k_list = [5, 10, 20]
+
+    raw_q = (base_options or {}).get("search_eval_query")
+    q = str(raw_q or "").strip()
+    cfg = EvalConfig(
+        k_list=k_list,
+        max_cases=max_cases,
+        top_k_for_recommend=max(k_list),
+    )
+    algo_opts = strip_eval_request_meta(base_options or {})
+
+    if not q:
+        return {
+            "rows": [],
+            "summary": _zero_metric_summary(cfg.k_list),
+            "n_cases": 0,
+            "eval_notice": "검색어가 비어 있습니다.",
+        }
+
+    user_cases = _build_search_eval_user_cases(filter_user_id, max_cases)
+    rows: list[dict[str, Any]] = []
+
+    for uid, relevant in user_cases:
+        rec_dict = _call_search(algo, q, cfg.top_k_for_recommend, algo_opts or None)
+        ranked = sorted(rec_dict, key=rec_dict.get, reverse=True)
+        metrics = evaluate(ranked, relevant, cfg.k_list)
+        rows.append(
+            {
+                "eval_kind": "search",
+                "user_id": uid,
+                "search_query": q,
+                "query_song_id": "",
+                "query_title": "",
+                "query_artist": "",
+                "n_relevant": len(relevant),
+                **metrics,
+            }
+        )
+
+    if not rows:
+        return {
+            "rows": [],
+            "summary": _zero_metric_summary(cfg.k_list),
+            "n_cases": 0,
+            "eval_notice": "좋아요 1곡 이상인 유저가 없어 검색 평가 케이스가 없습니다.",
+        }
+
+    metric_cols = _metric_column_keys(rows[0])
+    rows.sort(
+        key=lambda r: _row_mean_all_eval_metrics(r, metric_cols),
+        reverse=True,
+    )
+    summary = {
+        m: float(np.mean([float(r[m]) for r in rows]))
+        for m in metric_cols
     }
+    return {
+        "rows": rows,
+        "summary": summary,
+        "n_cases": len(rows),
+    }
+
+
+def _run_recommend_eval_for_algorithm(
+    algo: Any,
+    *,
+    base_options: dict[str, Any] | None = None,
+    k_list: list[int] | None = None,
+    max_cases: int = 0,
+    filter_user_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    곡 기반 leave-one-out: 좋아요·재생 로그에서 (user, 시드곡, 정답집합) 케이스.
+    eval_seed_song_id 가 있으면: 전체 풀에서는 시드가 그 id 인 케이스만;
+    filter_user_id 가 함께 있으면 그 유저·그 시드 한 건만(나머지 좋아요가 정답).
     """
     if k_list is None:
         k_list = [5, 10, 20]
@@ -259,7 +395,34 @@ def run_offline_eval_for_algorithm(
         top_k_for_recommend=max(k_list),
     )
 
-    cases = _build_eval_cases(cfg.max_cases, filter_user_id=filter_user_id)
+    seed = str((base_options or {}).get("eval_seed_song_id") or "").strip()
+
+    if seed and filter_user_id is not None:
+        liked = [str(x) for x in get_user_liked_song_ids(int(filter_user_id)) if x]
+        liked = list(dict.fromkeys(liked))
+        if seed not in liked:
+            return {
+                "rows": [],
+                "summary": _zero_metric_summary(cfg.k_list),
+                "n_cases": 0,
+                "eval_notice": "선택한 기준곡이 현재 계정 좋아요에 없습니다.",
+            }
+        rel = [x for x in liked if x != seed]
+        if not rel:
+            return {
+                "rows": [],
+                "summary": _zero_metric_summary(cfg.k_list),
+                "n_cases": 0,
+                "eval_notice": "기준곡 외에 다른 좋아요가 없어 leave-one-out 정답이 비었습니다.",
+            }
+        cases = [(int(filter_user_id), seed, rel)]
+    else:
+        cases = _build_eval_cases(0, filter_user_id=filter_user_id)
+        if seed:
+            cases = [c for c in cases if str(c[1]) == seed]
+        if max_cases > 0:
+            cases = cases[:max_cases]
+
     rows: list[dict[str, Any]] = []
     song_meta = _song_title_artist_map()
     algo_opts = strip_eval_request_meta(base_options)
@@ -283,6 +446,7 @@ def run_offline_eval_for_algorithm(
                 "query_song_id": query_song_id,
                 "query_title": q_title,
                 "query_artist": q_artist,
+                "search_query": "",
                 "n_relevant": len(relevant),
                 **metrics,
             }
@@ -295,14 +459,12 @@ def run_offline_eval_for_algorithm(
             "n_cases": 0,
         }
 
-    # 지표 컬럼 추출 (Precision@K, Recall@K, NDCG@K)
     metric_cols = _metric_column_keys(rows[0])
     rows.sort(
         key=lambda r: _row_mean_all_eval_metrics(r, metric_cols),
         reverse=True,
     )
 
-    # 평균 지표 계산
     summary = {
         m: float(np.mean([float(r[m]) for r in rows]))
         for m in metric_cols
@@ -313,6 +475,32 @@ def run_offline_eval_for_algorithm(
         "summary": summary,
         "n_cases": len(rows),
     }
+
+
+def run_offline_eval_for_algorithm(
+    algo: Any,
+    *,
+    base_options: dict[str, Any] | None = None,
+    k_list: list[int] | None = None,
+    max_cases: int = 0,
+    filter_user_id: int | None = None,
+) -> dict[str, Any]:
+    mode = normalize_eval_mode(base_options)
+    if mode == "search":
+        return _run_search_eval_for_algorithm(
+            algo,
+            base_options=base_options,
+            k_list=k_list,
+            max_cases=max_cases,
+            filter_user_id=filter_user_id,
+        )
+    return _run_recommend_eval_for_algorithm(
+        algo,
+        base_options=base_options,
+        k_list=k_list,
+        max_cases=max_cases,
+        filter_user_id=filter_user_id,
+    )
 
 def run_offline_eval_variants(
     algo: Any,
@@ -327,14 +515,26 @@ def run_offline_eval_variants(
       - simple / advanced
       - use_llm_search on/off
     4가지 변형을 동일 데이터셋으로 평가.
+    eval_mode=search 이면 검색 파이프라인에 위 조합을 넘김.
     """
     if k_list is None:
         k_list = [5, 10, 20]
 
-    base = strip_eval_request_meta(base_options or {})
+    raw_opts = base_options or {}
+    ev_mode = normalize_eval_mode(raw_opts)
+    base = strip_eval_request_meta(raw_opts)
+    meta_for_eval: dict[str, Any] = {"eval_mode": ev_mode}
+    if raw_opts.get("search_eval_query") is not None:
+        meta_for_eval["search_eval_query"] = raw_opts["search_eval_query"]
+    if raw_opts.get("eval_seed_song_id"):
+        meta_for_eval["eval_seed_song_id"] = raw_opts["eval_seed_song_id"]
+
     wcols = hybrid_eval_weight_columns(base)
 
-    _ecounts = eval_recommend_case_counts(max_cases, filter_user_id)
+    if ev_mode == "search":
+        _ecounts = eval_search_case_counts(max_cases, filter_user_id)
+    else:
+        _ecounts = eval_recommend_case_counts(max_cases, filter_user_id)
     rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
 
@@ -346,9 +546,7 @@ def run_offline_eval_variants(
     ]
 
     for mode, use_llm in variants:
-        opt = dict(base)
-        opt["mode"] = mode
-        opt["use_llm_search"] = use_llm
+        opt = {**meta_for_eval, **base, "mode": mode, "use_llm_search": use_llm}
 
         result = run_offline_eval_for_algorithm(
             algo,
@@ -368,15 +566,16 @@ def run_offline_eval_variants(
                 }
             )
 
-        summary_rows.append(
-            {
-                **wcols,
-                "variant_mode": mode,
-                "variant_use_llm_search": use_llm,
-                "n_cases": result["n_cases"],
-                **result["summary"],
-            }
-        )
+        sr: dict[str, Any] = {
+            **wcols,
+            "variant_mode": mode,
+            "variant_use_llm_search": use_llm,
+            "n_cases": result["n_cases"],
+            **result["summary"],
+        }
+        if result.get("eval_notice"):
+            sr["eval_notice"] = result["eval_notice"]
+        summary_rows.append(sr)
 
     # 예: {"simple|llm=False|Precision@5": 0.21, ...}
     summary_for_chart: dict[str, float] = {}

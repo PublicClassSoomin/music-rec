@@ -350,7 +350,7 @@ def run_eval(
         if not authorization:
             raise HTTPException(
                 status_code=401,
-                detail="현재 계정만 곡 기반 평가는 로그인이 필요합니다.",
+                detail="「현재 로그인 계정만」 평가는 로그인이 필요합니다.",
             )
         current_uid = get_or_create_user(_get_current_username(authorization))
     filter_uid: int | None = current_uid if only_me else None
@@ -358,11 +358,25 @@ def run_eval(
     try:
         from evaluation.offline_eval import (
             eval_recommend_case_counts,
+            eval_search_case_counts,
             hybrid_eval_weight_columns,
+            normalize_eval_mode,
             run_offline_eval_for_algorithm,
             run_offline_eval_variants,
         )
 
+        eval_mode = normalize_eval_mode(opts)
+        if eval_mode == "search":
+            if not hasattr(algo, "search_by_query_with_options"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="검색어 평가는 검색 API를 지원하는 알고리즘(예: hybrid_faiss_cooc)에서만 가능합니다.",
+                )
+            if not str(opts.get("search_eval_query") or "").strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="검색어 기반 평가입니다. 모달의 검색어 입력란에 문장을 입력하세요.",
+                )
         if run_variants:
             result = run_offline_eval_variants(
                 algo,
@@ -381,6 +395,7 @@ def run_eval(
                 "summary": result["summary"],
                 "eval_only_current_user": only_me,
                 "eval_filter_user_id": filter_uid,
+                "eval_eval_mode": eval_mode,
                 "eval_recommend_pool_all_users": result.get("eval_recommend_pool_all_users"),
                 "eval_recommend_pool_filtered_user": result.get("eval_recommend_pool_filtered_user"),
                 "eval_recommend_cases_evaluated": result.get("eval_recommend_cases_evaluated"),
@@ -423,7 +438,11 @@ def run_eval(
                 "n_cases": single["n_cases"],
                 **single["summary"],
             }
-        _ec = eval_recommend_case_counts(max_cases, filter_uid)
+        _ec = (
+            eval_search_case_counts(max_cases, filter_uid)
+            if eval_mode == "search"
+            else eval_recommend_case_counts(max_cases, filter_uid)
+        )
         single_body: dict[str, Any] = {
             "algorithm": req.algorithm,
             "mode": "single",
@@ -434,8 +453,11 @@ def run_eval(
             "summary": single["summary"],
             "eval_only_current_user": only_me,
             "eval_filter_user_id": filter_uid,
+            "eval_eval_mode": eval_mode,
             **_ec,
         }
+        if single.get("eval_notice"):
+            single_body["eval_notice"] = single["eval_notice"]
         if req.algorithm.startswith("hybrid"):
             single_body["hybrid_sidebar_snapshot"] = {
                 "mode": opts.get("mode"),
@@ -444,6 +466,8 @@ def run_eval(
                 "use_llm_search": opts.get("use_llm_search"),
             }
         return single_body
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"평가 실행 실패: {e}")
 

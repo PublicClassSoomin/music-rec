@@ -15,6 +15,46 @@ let hybridOptions = {
   use_llm_search: false,
 };
 
+const EVAL_SETTINGS_STORAGE_KEY = "music_rec_eval_settings_v1";
+
+/** 평가 옵션(검색어/기준곡/범위). 하이브리드 가중치는 hybridOptions와 별도 */
+let evalSettings = {
+  eval_mode: "search",
+  search_eval_query: "",
+  eval_seed_song_id: "",
+  eval_only_current_user: true,
+};
+
+function loadEvalSettingsFromStorage() {
+  try {
+    const raw = localStorage.getItem(EVAL_SETTINGS_STORAGE_KEY);
+    if (!raw) return;
+    const o = JSON.parse(raw);
+    if (o.eval_mode === "search" || o.eval_mode === "recommend") {
+      evalSettings.eval_mode = o.eval_mode;
+    }
+    if (typeof o.search_eval_query === "string") {
+      evalSettings.search_eval_query = o.search_eval_query;
+    }
+    if (typeof o.eval_seed_song_id === "string") {
+      evalSettings.eval_seed_song_id = o.eval_seed_song_id;
+    }
+    if (typeof o.eval_only_current_user === "boolean") {
+      evalSettings.eval_only_current_user = o.eval_only_current_user;
+    }
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function persistEvalSettings() {
+  try {
+    localStorage.setItem(EVAL_SETTINGS_STORAGE_KEY, JSON.stringify(evalSettings));
+  } catch (_) {
+    /* ignore */
+  }
+}
+
 /** 홈 상단 그리드: 곡/유저 추천 시 표시 개수 */
 const HOME_RECO_TOP_K = 16;
 /** 검색 API top_k (유사도 순, 아래 검색 결과 블록에만 표시) */
@@ -59,6 +99,7 @@ let embedPanelMinimized = false;
 // ── 초기화 ────────────────────────────────────────────────
 
 window.addEventListener("DOMContentLoaded", async () => {
+  loadEvalSettingsFromStorage();
   bindAuthEvents();
   await bootstrapAuth();
   setupNav();
@@ -99,13 +140,28 @@ window.addEventListener("DOMContentLoaded", async () => {
       const id = el.getAttribute("data-modal-dismiss");
       if (id === "hybrid-modal") closeHybridModal();
       if (id === "eval-modal") closeEvalModal();
+      if (id === "eval-settings-modal") closeEvalSettingsModal();
     });
   });
 
-  document.getElementById("eval-open-btn").addEventListener("click", openEvalModal);
+  document.getElementById("eval-settings-btn").addEventListener("click", () => {
+    void openEvalSettingsModal();
+  });
+  document.getElementById("eval-open-btn").addEventListener("click", () => {
+    void openEvalModal();
+  });
   document.getElementById("eval-close-btn").addEventListener("click", closeEvalModal);
   document.getElementById("eval-close-x").addEventListener("click", closeEvalModal);
   document.getElementById("eval-run-btn").addEventListener("click", runEvaluation);
+  document.getElementById("eval-edit-settings-btn").addEventListener("click", () => {
+    void openEvalSettingsModal();
+  });
+  document.getElementById("eval-settings-save-btn").addEventListener("click", saveEvalSettingsAndClose);
+  document.getElementById("eval-settings-cancel-btn").addEventListener("click", closeEvalSettingsModal);
+  document.getElementById("eval-settings-close-x").addEventListener("click", closeEvalSettingsModal);
+  document.querySelectorAll('input[name="eval-settings-eval-mode"]').forEach((el) => {
+    el.addEventListener("change", syncEvalSettingsModePanels);
+  });
 
   document.addEventListener("keydown", onModalEscape);
 
@@ -151,6 +207,18 @@ function refreshAuthUI() {
     status.textContent = "비로그인 상태";
     if (gateStatus) gateStatus.textContent = "";
   }
+  const ou = document.getElementById("eval-settings-only-current-user");
+  if (ou) {
+    ou.disabled = !authUser;
+    if (!authUser) ou.checked = false;
+  }
+  if (!document.getElementById("eval-modal")?.classList.contains("hidden")) {
+    updateEvalSummaryInEvalModal();
+  }
+  if (!document.getElementById("eval-settings-modal")?.classList.contains("hidden")) {
+    loadEvalSettingsUI();
+    void refreshEvalSettingsSeedSelect();
+  }
 }
 
 function showAuthGate(visible) {
@@ -193,6 +261,10 @@ function onLogout() {
   authToken = null;
   likedSongs.clear();
   localStorage.removeItem("auth_token");
+  if (evalSettings.eval_only_current_user) {
+    evalSettings.eval_only_current_user = false;
+    persistEvalSettings();
+  }
   showAuthGate(true);
   refreshAuthUI();
 }
@@ -746,6 +818,7 @@ function openHybridModal() {
 function closeHybridModal() {
   document.getElementById("hybrid-modal").classList.add("hidden");
   if (!document.getElementById("eval-modal")?.classList.contains("hidden")) return;
+  if (!document.getElementById("eval-settings-modal")?.classList.contains("hidden")) return;
   document.body.style.overflow = "";
 }
 
@@ -765,6 +838,11 @@ function saveHybridOptions() {
 
 function onModalEscape(ev) {
   if (ev.key !== "Escape") return;
+  const es = document.getElementById("eval-settings-modal");
+  if (es && !es.classList.contains("hidden")) {
+    closeEvalSettingsModal();
+    return;
+  }
   const hyb = document.getElementById("hybrid-modal");
   const eva = document.getElementById("eval-modal");
   if (hyb && !hyb.classList.contains("hidden")) {
@@ -776,22 +854,137 @@ function onModalEscape(ev) {
   }
 }
 
-// 평가 모달 + 표/차트
-function openEvalModal() {
-  document.getElementById("eval-modal").classList.remove("hidden");
-  document.body.style.overflow = "hidden";
-  const cb = document.getElementById("eval-only-current-user");
-  if (cb) {
-    cb.disabled = !authUser;
-    cb.checked = !!authUser;
+// 평가 옵션 모달 + 결과 모달 + 표/차트
+function syncEvalSettingsModePanels() {
+  const mode =
+    document.querySelector('input[name="eval-settings-eval-mode"]:checked')?.value ||
+    "search";
+  const ps = document.getElementById("eval-settings-panel-search");
+  const pr = document.getElementById("eval-settings-panel-recommend");
+  if (ps) ps.toggleAttribute("hidden", mode !== "search");
+  if (pr) pr.toggleAttribute("hidden", mode !== "recommend");
+  const seedHint = document.getElementById("eval-settings-seed-hint-login");
+  if (seedHint) {
+    const show = mode === "recommend" && !authToken;
+    seedHint.toggleAttribute("hidden", !show);
   }
 }
+
+async function refreshEvalSettingsSeedSelect() {
+  const sel = document.getElementById("eval-settings-seed-song-id");
+  if (!sel) return;
+  const keep = evalSettings.eval_seed_song_id || sel.value;
+  sel.innerHTML =
+    '<option value="">선택 안 함 — 모든 시드·유저 조합으로 평가</option>';
+  if (!authToken) return;
+  try {
+    const res = await apiFetch("/api/likes");
+    if (!res?.likes?.length) return;
+    for (const song of res.likes) {
+      if (!song?.song_id) continue;
+      const opt = document.createElement("option");
+      opt.value = song.song_id;
+      const t = (song.title || "").trim();
+      const a = (song.artist || "").trim();
+      opt.textContent = t && a ? `${t} — ${a}` : t || song.song_id;
+      sel.appendChild(opt);
+    }
+    if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function loadEvalSettingsUI() {
+  const mode = evalSettings.eval_mode === "recommend" ? "recommend" : "search";
+  const rSearch = document.getElementById("eval-settings-mode-search");
+  const rRec = document.getElementById("eval-settings-mode-recommend");
+  if (rSearch && rRec) {
+    if (mode === "recommend") rRec.checked = true;
+    else rSearch.checked = true;
+  }
+  const sq = document.getElementById("eval-settings-search-query");
+  if (sq) sq.value = evalSettings.search_eval_query || "";
+  const ou = document.getElementById("eval-settings-only-current-user");
+  if (ou) {
+    ou.disabled = !authUser;
+    ou.checked = !!(authUser && evalSettings.eval_only_current_user);
+  }
+  syncEvalSettingsModePanels();
+}
+
+function readEvalSettingsFromForm() {
+  evalSettings.eval_mode =
+    document.querySelector('input[name="eval-settings-eval-mode"]:checked')?.value ||
+    "search";
+  evalSettings.search_eval_query =
+    document.getElementById("eval-settings-search-query")?.value?.trim() || "";
+  evalSettings.eval_seed_song_id =
+    document.getElementById("eval-settings-seed-song-id")?.value?.trim() || "";
+  const ou = document.getElementById("eval-settings-only-current-user");
+  evalSettings.eval_only_current_user = !!(authUser && ou?.checked);
+}
+
+function saveEvalSettingsAndClose() {
+  readEvalSettingsFromForm();
+  persistEvalSettings();
+  updateEvalSummaryInEvalModal();
+  closeEvalSettingsModal();
+}
+
+function closeEvalSettingsModal() {
+  document.getElementById("eval-settings-modal")?.classList.add("hidden");
+  if (!document.getElementById("eval-modal")?.classList.contains("hidden")) return;
+  if (!document.getElementById("hybrid-modal")?.classList.contains("hidden")) return;
+  document.body.style.overflow = "";
+}
+
+async function openEvalSettingsModal() {
+  loadEvalSettingsUI();
+  document.getElementById("eval-settings-modal")?.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+  await refreshEvalSettingsSeedSelect();
+  syncEvalSettingsModePanels();
+}
+
+function updateEvalSummaryInEvalModal() {
+  const el = document.getElementById("eval-current-settings-summary");
+  if (!el) return;
+  const modeLabel =
+    evalSettings.eval_mode === "recommend" ? "기준곡(추천)" : "검색어";
+  const si = (document.getElementById("search-input")?.value || "").trim();
+  const savedQ = (evalSettings.search_eval_query || "").trim();
+  let detail = "";
+  if (evalSettings.eval_mode === "search") {
+    const q = savedQ || si;
+    detail = q
+      ? `문장: 「${escapeHtmlEval(q)}」`
+      : "문장: (비어 있으면 실행 시 홈 검색창과 동일)";
+  } else {
+    detail = evalSettings.eval_seed_song_id
+      ? `기준곡 ID: ${escapeHtmlEval(evalSettings.eval_seed_song_id)}`
+      : "기준곡: 선택 안 함 · 전체 조합";
+  }
+  const scope =
+    authUser && evalSettings.eval_only_current_user
+      ? "범위: 현재 계정만"
+      : "범위: DB 전체(좋아요 있는 계정)";
+  el.innerHTML = `<strong>${modeLabel}</strong> · ${detail} · ${scope}<br /><span class="eval-run-info__muted">가중치·threshold·LLM은 하이브리드 설정과 동일</span>`;
+}
+
+async function openEvalModal() {
+  document.getElementById("eval-modal").classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+  updateEvalSummaryInEvalModal();
+}
+
 function closeEvalModal() {
   document.getElementById("eval-modal").classList.add("hidden");
   renderEvalRunInfo(null);
   const capRec = document.getElementById("eval-chart-caption-recommend");
-  if (capRec) capRec.textContent = "곡 기반 추천 (leave-one-out)";
+  if (capRec) capRec.textContent = "오프라인 평가";
   if (!document.getElementById("hybrid-modal")?.classList.contains("hidden")) return;
+  if (!document.getElementById("eval-settings-modal")?.classList.contains("hidden")) return;
   document.body.style.overflow = "";
 }
 
@@ -803,13 +996,40 @@ const EVAL_COL_LABELS = {
   variant_use_llm_search: "조합·LLM검색",
   variant: "평가방식",
   eval_kind: "평가종류",
+  search_query: "검색어",
   n_cases: "케이스수",
   user_id: "user_id",
-  query_song_id: "쿼리곡ID",
-  query_title: "쿼리곡",
-  query_artist: "쿼리아티스트",
+  query_song_id: "기준곡 ID",
+  query_title: "기준곡 제목",
+  query_artist: "기준곡 아티스트",
   n_relevant: "정답곡수",
 };
+
+const EVAL_TABLE_COL_PRIORITY = [
+  "eval_kind",
+  "search_query",
+  "query_title",
+  "query_artist",
+  "query_song_id",
+  "user_id",
+  "n_relevant",
+  "variant_mode",
+  "variant_use_llm_search",
+  "weight_audio_pct",
+  "weight_cooc_pct",
+  "threshold",
+];
+
+function evalTableColumnOrder(cols) {
+  const out = [];
+  for (const p of EVAL_TABLE_COL_PRIORITY) {
+    if (cols.includes(p)) out.push(p);
+  }
+  for (const c of cols) {
+    if (!out.includes(c)) out.push(c);
+  }
+  return out;
+}
 
 function evalColTitle(key) {
   return EVAL_COL_LABELS[key] || key;
@@ -861,10 +1081,17 @@ function renderEvalRunInfo(res) {
       `<p class="eval-run-info__line">공동출현 모드: <strong>${escapeHtmlEval(modeLabel)}</strong> · 가중치: <strong>${escapeHtmlEval(wline || "—")}</strong> · threshold: <strong>${escapeHtmlEval(String(th))}</strong></p>`,
       `<p class="eval-run-info__line">${escapeHtmlEval(llm)}</p>`
     );
+    const evm = res.eval_eval_mode || res.options_used?.eval_mode || "search";
     if (res.mode === "variants") {
-      blocks.push(
-        `<p class="eval-run-info__note">표·차트는 <strong>네 조합</strong>(Simple/Advanced × LLM on/off)마다 계산했고, 가중치·threshold·LLM 스위치는 <strong>요청 시점 저장값</strong>이 <code>recommend_with_options</code>에 넘어갑니다. 시드 곡 메타로 텍스트 검색이 합성되므로 LLM on/off에 따라 수치가 달라질 수 있고, Gemini 미설정·동일 확장이면 같을 수 있습니다.</p>`
-      );
+      if (evm === "search") {
+        blocks.push(
+          `<p class="eval-run-info__note">표·차트는 <strong>네 조합</strong>(Simple/Advanced × LLM)마다 <strong>동일 검색어</strong>로 <code>search_by_query_with_options</code>를 돌린 결과입니다. 가중치·threshold는 추천용이며 검색 점수에는 직접 쓰이지 않을 수 있습니다.</p>`
+        );
+      } else {
+        blocks.push(
+          `<p class="eval-run-info__note">표·차트는 <strong>네 조합</strong>(Simple/Advanced × LLM on/off)마다 계산했고, 가중치·threshold·LLM 스위치는 <strong>요청 시점 저장값</strong>이 <code>recommend_with_options</code>에 넘어갑니다. 시드 곡 메타로 텍스트 검색이 합성되므로 LLM on/off에 따라 수치가 달라질 수 있습니다.</p>`
+        );
+      }
     } else {
       blocks.push(
         `<p class="eval-run-info__note">단일 평가(run_variants=false)입니다. 표의 조합 열은 위 저장 설정과 같습니다.</p>`
@@ -876,14 +1103,26 @@ function renderEvalRunInfo(res) {
     );
   }
 
+  const evMode = res.eval_eval_mode || res.options_used?.eval_mode || "search";
+  const usedQ = (res.options_used && res.options_used.search_eval_query) || "";
+  if (evMode === "search" && String(usedQ).trim()) {
+    blocks.push(
+      `<p class="eval-run-info__line">이번 검색어 평가 문장: <strong>${escapeHtmlEval(String(usedQ).trim())}</strong></p>`
+    );
+  }
+  const usedSeed = (res.options_used && res.options_used.eval_seed_song_id) || "";
+  if (evMode === "recommend" && String(usedSeed).trim()) {
+    blocks.push(
+      `<p class="eval-run-info__line">선택한 기준곡 ID: <strong>${escapeHtmlEval(String(usedSeed).trim())}</strong></p>`
+    );
+  }
+
   if (res.eval_only_current_user === true) {
     blocks.push(
-      `<p class="eval-run-info__line">곡 기반 평가 범위: <strong>현재 로그인 계정만</strong> (user_id=${escapeHtmlEval(String(res.eval_filter_user_id ?? ""))})</p>`
+      `<p class="eval-run-info__line">평가 범위: <strong>현재 로그인 계정만</strong> (user_id=${escapeHtmlEval(String(res.eval_filter_user_id ?? ""))})</p>`
     );
   } else if (res.eval_only_current_user === false) {
-    blocks.push(
-      `<p class="eval-run-info__line">곡 기반 평가 범위: <strong>DB 전체 유저</strong> 케이스</p>`
-    );
+    blocks.push(`<p class="eval-run-info__line">평가 범위: <strong>DB 전체 유저</strong></p>`);
   }
 
   const pa = res.eval_recommend_pool_all_users;
@@ -891,10 +1130,17 @@ function renderEvalRunInfo(res) {
   const ne = res.eval_recommend_cases_evaluated;
   if (pa != null && ne != null) {
     const samePool = pf != null && Number(pa) === Number(pf) && res.eval_only_current_user;
+    const kindLabel = evMode === "search" ? "검색어 평가 케이스" : "기준곡(추천) 평가 케이스";
     blocks.push(
-      `<p class="eval-run-info__line">곡 기반 케이스 — DB 전체 풀 <strong>${escapeHtmlEval(String(pa))}</strong>건 · 필터 적용 후 대상 풀 <strong>${escapeHtmlEval(String(pf ?? "—"))}</strong>건 · 이번에 실제 계산 <strong>${escapeHtmlEval(String(ne))}</strong>건${
+      `<p class="eval-run-info__line">${escapeHtmlEval(kindLabel)} — DB 전체 풀 <strong>${escapeHtmlEval(String(pa))}</strong>건 · 필터 적용 후 대상 풀 <strong>${escapeHtmlEval(String(pf ?? "—"))}</strong>건 · 이번에 실제 계산 <strong>${escapeHtmlEval(String(ne))}</strong>건${
         samePool ? " <span class=\"eval-run-info__muted\">(전체와 내 계정 풀이 같아 지표가 동일할 수 있음)</span>" : ""
       }</p>`
+    );
+  }
+
+  if (res.eval_notice) {
+    blocks.push(
+      `<p class="eval-run-info__note">${escapeHtmlEval(String(res.eval_notice))}</p>`
     );
   }
 
@@ -905,9 +1151,19 @@ function renderEvalRunInfo(res) {
 async function runEvaluation() {
   const algo = currentAlgo();
   const opts = isHybridAlgo(algo) ? { ...hybridOptions } : {};
-  const cb = document.getElementById("eval-only-current-user");
-  const onlyMe = !!(authUser && cb && !cb.disabled && cb.checked);
+  const onlyMe = !!(authUser && evalSettings.eval_only_current_user);
   opts.eval_only_current_user = onlyMe;
+
+  opts.eval_mode = evalSettings.eval_mode;
+
+  if (evalSettings.eval_mode === "search") {
+    const q = (evalSettings.search_eval_query || "").trim();
+    const si = document.getElementById("search-input")?.value?.trim() || "";
+    opts.search_eval_query = q || si;
+  } else if (evalSettings.eval_seed_song_id) {
+    opts.eval_seed_song_id = evalSettings.eval_seed_song_id;
+  }
+
   const body = {
     algorithm: algo,
     options: opts,
@@ -923,7 +1179,7 @@ async function runEvaluation() {
     if (authToken) fetchOpts.headers.Authorization = `Bearer ${authToken}`;
     const r = await fetch(API + "/api/eval/run", fetchOpts);
     if (r.status === 401) {
-      let msg = "로그인이 필요합니다. (현재 계정만 곡 기반 평가)";
+      let msg = "로그인이 필요합니다. (「현재 계정만」 평가)";
       try {
         const j = await r.json();
         if (typeof j.detail === "string") msg = j.detail;
@@ -932,7 +1188,12 @@ async function runEvaluation() {
       return;
     }
     if (!r.ok) {
-      return alert("평가 실패 (서버 오류 또는 알고리즘 없음)");
+      let msg = "평가 실패 (서버 오류 또는 알고리즘 없음)";
+      try {
+        const j = await r.json();
+        if (typeof j.detail === "string") msg = j.detail;
+      } catch (_) {}
+      return alert(msg);
     }
     res = await r.json();
   } catch (e) {
@@ -945,12 +1206,23 @@ async function runEvaluation() {
   if (capRec) {
     const only = res.eval_only_current_user === true;
     const ne = res.eval_recommend_cases_evaluated;
-    capRec.textContent =
-      only && ne != null
-        ? `곡 기반 추천 (leave-one-out) · 현재 로그인 계정만 · 이번 실행 ${ne}건`
-        : only
-          ? "곡 기반 추천 (leave-one-out) · 현재 로그인 계정만"
-          : "곡 기반 추천 (leave-one-out) · DB 전체 유저";
+    const em = res.eval_eval_mode || evalSettings.eval_mode;
+    if (em === "search") {
+      const q = (res.options_used && res.options_used.search_eval_query) || opts.search_eval_query || "";
+      capRec.textContent =
+        only && ne != null
+          ? `검색어 평가 · 「${String(q).slice(0, 40)}${String(q).length > 40 ? "…" : ""}」 · 내 계정만 · ${ne}건`
+          : only
+            ? `검색어 평가 · 내 계정만`
+            : `검색어 평가 · DB 전체 유저`;
+    } else {
+      capRec.textContent =
+        only && ne != null
+          ? `기준곡 추천 평가 · 내 계정만 · ${ne}건`
+          : only
+            ? `기준곡 추천 평가 · 내 계정만`
+            : `기준곡 추천 평가 · DB 전체 유저`;
+    }
   }
   renderEvalTable(res.rows || [], res.summary_rows || [], res);
   renderEvalChart(res.summary || {});
@@ -958,7 +1230,7 @@ async function runEvaluation() {
 
 function _fmtEvalCell(v, col) {
   if (col === "eval_kind") {
-    if (v === "recommend") return "곡기반";
+    if (v === "recommend") return "기준곡";
     if (v === "search") return "검색어";
   }
   if (col === "variant_use_llm_search") {
@@ -977,17 +1249,26 @@ function _fmtEvalCell(v, col) {
 function renderEvalTable(rows, summaryRows, res) {
   const wrap = document.getElementById("eval-table-wrap");
   let zeroBanner = "";
+  const evMode = res?.eval_eval_mode || res?.options_used?.eval_mode || "search";
   if (res && Number(res.eval_recommend_cases_evaluated) === 0) {
     const only = res.eval_only_current_user === true;
-    zeroBanner = `<p class="eval-banner eval-banner--warn">곡 기반 평가 <strong>케이스 0건</strong>입니다. 아래 표·막대그래프의 Precision/Recall/NDCG는 <strong>계산할 데이터가 없어 0</strong>으로 표시됩니다.${
-      only
-        ? " <strong>현재 로그인 계정</strong>에 좋아요 2곡 이상(또는 재생 20초 이상인 곡 2곡 이상)이 DB에 기록돼 있는지 확인하세요."
-        : " DB에 해당 조건을 만족하는 유저·로그가 있는지 확인하세요."
-    }</p>`;
+    if (evMode === "search") {
+      zeroBanner = `<p class="eval-banner eval-banner--warn">검색어 평가 <strong>케이스 0건</strong>입니다. Precision/Recall/NDCG는 데이터 없이 <strong>0</strong>으로 보일 수 있습니다.${
+        only
+          ? " <strong>현재 계정</strong>에 좋아요가 1곡 이상 DB에 있는지, 검색어를 입력했는지 확인하세요."
+          : " 좋아요 1곡 이상인 유저가 DB에 있는지 확인하세요."
+      }</p>`;
+    } else {
+      zeroBanner = `<p class="eval-banner eval-banner--warn">기준곡(추천) 평가 <strong>케이스 0건</strong>입니다. Precision/Recall/NDCG는 <strong>데이터 없이 0</strong>으로 보일 수 있습니다.${
+        only
+          ? " <strong>현재 계정</strong>에 좋아요 2곡 이상(또는 재생 20초 이상 곡 2곡 이상)이 있는지, 아래 <strong>기준곡 선택</strong>에 쓸 좋아요가 있는지 확인하세요."
+          : " DB에 해당 조건을 만족하는 유저·로그가 있는지 확인하세요."
+      }</p>`;
+    }
   }
 
   if (rows.length) {
-    const cols = Object.keys(rows[0]);
+    const cols = evalTableColumnOrder(Object.keys(rows[0]));
     const head = `<tr>${cols.map((c) => `<th>${escapeHtmlEval(evalColTitle(c))}</th>`).join("")}</tr>`;
     const body = rows
       .map(
@@ -995,12 +1276,16 @@ function renderEvalTable(rows, summaryRows, res) {
           `<tr>${cols.map((c) => `<td>${escapeHtmlEval(_fmtEvalCell(r[c], c))}</td>`).join("")}</tr>`
       )
       .join("");
-    wrap.innerHTML = `${zeroBanner}<p class="eval-subcap">곡 기반 추천 · 케이스별 상세 · 앞쪽 열은 가중치·임계값·조합(모드·LLM)</p><table class="eval-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+    const sub =
+      evMode === "search"
+        ? "검색어 평가 · 행마다 검색어·user_id · 하이브리드면 조합(공동출현·LLM) 열 참고"
+        : "기준곡 평가 · 표의 기준곡 제목·아티스트가 시드 곡 · 하이브리드면 조합 열 참고";
+    wrap.innerHTML = `${zeroBanner}<p class="eval-subcap">${escapeHtmlEval(sub)}</p><table class="eval-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
     return;
   }
 
   if (summaryRows && summaryRows.length) {
-    const cols = Object.keys(summaryRows[0]);
+    const cols = evalTableColumnOrder(Object.keys(summaryRows[0]));
     const head = `<tr>${cols.map((c) => `<th>${escapeHtmlEval(evalColTitle(c))}</th>`).join("")}</tr>`;
     const body = summaryRows
       .map(

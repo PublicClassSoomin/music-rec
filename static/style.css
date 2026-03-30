@@ -716,6 +716,11 @@ body {
 /* ── 모달 공통 ─────────────────────────────────────────── */
 .modal.hidden { display: none !important; }
 
+/* 평가 옵션 모달: 결과 모달 위에 겹침 */
+.modal.modal--eval-settings {
+  z-index: 1700;
+}
+
 .modal {
   position: fixed;
   inset: 0;
@@ -749,6 +754,11 @@ body {
 }
 
 /* 홈(view-home) 메인 콘텐츠 폭(사이드바·패딩 제외)보다 살짝만 좁게 */
+.modal-shell--eval-settings {
+  max-width: min(520px, calc(100vw - var(--sidebar-w) - 48px));
+  max-height: min(calc(100vh - var(--player-h) - 32px), 640px);
+}
+
 .modal-shell--eval {
   max-width: min(1200px, calc(100vw - var(--sidebar-w) - 72px));
   max-height: min(calc(100vh - var(--player-h) - 32px), 920px);
@@ -1323,6 +1333,37 @@ body {
   color: var(--text-sub);
 }
 
+.sidebar-section--stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-section--stack .auth-btn {
+  width: 100%;
+}
+
+.eval-footer-options--compact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 12px;
+  margin-bottom: 4px;
+}
+
+.eval-current-settings-summary {
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-sub);
+}
+
+.eval-edit-settings-btn {
+  flex-shrink: 0;
+}
+
 .modal-card-footer--eval {
   flex-direction: column;
   align-items: stretch;
@@ -1335,6 +1376,78 @@ body {
   line-height: 1.45;
 }
 
+.eval-mode-fieldset {
+  border: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+.eval-mode-legend {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+.eval-mode-card {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+.eval-mode-card-title {
+  display: inline-block;
+  margin-left: 4px;
+}
+.eval-mode-card-desc {
+  margin: 6px 0 8px 26px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-sub);
+}
+.eval-opt-label--inline {
+  margin-bottom: 4px;
+}
+.eval-opt-label--block {
+  align-items: flex-start;
+  margin-bottom: 0;
+}
+.eval-opt-label--block input[type="radio"] {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+.eval-panel-nested {
+  margin: 0 0 4px 26px;
+}
+.eval-seed-label-strong {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.eval-seed-inline-hint {
+  margin: 6px 0 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-sub);
+}
+.eval-opt-field__muted {
+  font-weight: normal;
+  opacity: 0.85;
+}
+.eval-search-query-input,
+.eval-seed-select {
+  width: 100%;
+  max-width: 100%;
+  margin-top: 2px;
+  margin-bottom: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-size: 0.9rem;
+}
 .eval-opt-label {
   display: flex;
   align-items: center;
