@@ -16,6 +16,41 @@ from evaluation.metrics import evaluate
 
 _METRIC_KEY_PREFIXES = ("Precision@", "Recall@", "NDCG@")
 
+# 평가 UI → API options 에만 쓰이고 recommend/search 에는 넘기면 안 되는 키
+_EVAL_REQUEST_META_KEYS = frozenset(
+    {
+        "eval_only_current_user",
+        "search_eval_query",
+        "run_variants",
+        "max_cases",
+        "k_list",
+    }
+)
+
+
+def strip_eval_request_meta(options: dict[str, Any] | None) -> dict[str, Any]:
+    if not options:
+        return {}
+    return {k: v for k, v in options.items() if k not in _EVAL_REQUEST_META_KEYS}
+
+
+def eval_recommend_case_counts(
+    max_cases: int,
+    filter_user_id: int | None,
+) -> dict[str, int]:
+    """UI 안내용: 전체 풀 / 필터 후 풀 / 실제 평가에 쓴 케이스 수."""
+    pool_all = len(_build_eval_cases(0, None))
+    if filter_user_id is not None:
+        pool_f = len(_build_eval_cases(0, filter_user_id))
+    else:
+        pool_f = pool_all
+    n_run = len(_build_eval_cases(max_cases, filter_user_id))
+    return {
+        "eval_recommend_pool_all_users": pool_all,
+        "eval_recommend_pool_filtered_user": pool_f,
+        "eval_recommend_cases_evaluated": n_run,
+    }
+
 
 def _metric_column_keys(sample_row: dict[str, Any]) -> list[str]:
     return [k for k in sample_row if isinstance(k, str) and k.startswith(_METRIC_KEY_PREFIXES)]
@@ -134,7 +169,10 @@ def _build_play_based_cases(
     return cases
 
 
-def _build_eval_cases(max_cases: int = 0) -> list[tuple[int, str, list[str]]]:
+def _build_eval_cases(
+    max_cases: int = 0,
+    filter_user_id: int | None = None,
+) -> list[tuple[int, str, list[str]]]:
     """좋아요 기반 + 재생 기반 케이스를 합치되, (user, query_song) 중복은 앞선 소스(좋아요)를 유지."""
     like_cases = _build_leave_one_out_cases(0)
     play_cases = _build_play_based_cases(0)
@@ -146,6 +184,9 @@ def _build_eval_cases(max_cases: int = 0) -> list[tuple[int, str, list[str]]]:
             continue
         seen.add(key)
         out.append(c)
+    if filter_user_id is not None:
+        fid = int(filter_user_id)
+        out = [c for c in out if int(c[0]) == fid]
     if max_cases > 0:
         out = out[:max_cases]
     return out
@@ -187,6 +228,7 @@ def run_offline_eval_for_algorithm(
     base_options: dict[str, Any] | None = None,
     k_list: list[int] | None = None,
     max_cases: int = 0,
+    filter_user_id: int | None = None,
 ) -> dict[str, Any]:
     """
     단일 알고리즘 오프라인 평가.
@@ -207,16 +249,17 @@ def run_offline_eval_for_algorithm(
         top_k_for_recommend=max(k_list),
     )
 
-    cases = _build_eval_cases(cfg.max_cases)
+    cases = _build_eval_cases(cfg.max_cases, filter_user_id=filter_user_id)
     rows: list[dict[str, Any]] = []
     song_meta = _song_title_artist_map()
+    algo_opts = strip_eval_request_meta(base_options)
 
     for uid, query_song_id, relevant in cases:
         rec_dict = _call_recommend(
             algo,
             query_song_id,
             top_k=cfg.top_k_for_recommend,
-            options=base_options,
+            options=algo_opts or None,
         )
         ranked = sorted(rec_dict, key=rec_dict.get, reverse=True)
         metrics = evaluate(ranked, relevant, cfg.k_list)
@@ -225,6 +268,7 @@ def run_offline_eval_for_algorithm(
 
         rows.append(
             {
+                "eval_kind": "recommend",
                 "user_id": uid,
                 "query_song_id": query_song_id,
                 "query_title": q_title,
@@ -256,12 +300,121 @@ def run_offline_eval_for_algorithm(
         "n_cases": len(rows),
     }
 
+def run_search_query_eval_variants(
+    algo: Any,
+    query: str,
+    *,
+    user_id: int,
+    base_options: dict[str, Any] | None = None,
+    k_list: list[int] | None = None,
+) -> dict[str, Any]:
+    """
+    검색창 문자열 기준 평가: 상위 순위 vs 해당 유저의 좋아요 집합으로 P@K / R@K / NDCG@K.
+    알고리즘이 search_by_query_with_options 를 지원할 때만 동작.
+    """
+    q = (query or "").strip()
+    if not q:
+        return {
+            "rows": [],
+            "summary_rows": [],
+            "summary": {},
+            "n_cases": 0,
+            "notice": "",
+        }
+    if not hasattr(algo, "search_by_query_with_options"):
+        return {
+            "rows": [],
+            "summary_rows": [],
+            "summary": {},
+            "n_cases": 0,
+            "notice": "이 알고리즘은 검색 API 경로가 없어 검색 평가를 건너뜁니다.",
+        }
+
+    if k_list is None:
+        k_list = [5, 10, 20]
+    rel = [str(x) for x in get_user_liked_song_ids(user_id) if x]
+    rel = list(dict.fromkeys(rel))
+    if not rel:
+        return {
+            "rows": [],
+            "summary_rows": [],
+            "summary": {},
+            "n_cases": 0,
+            "notice": "검색 평가는 좋아요한 곡이 1곡 이상일 때만 가능합니다.",
+        }
+
+    # UI 검색과 같이 자연어 전체가 순위를 바꾸도록 전체 임베딩 경로 사용
+    # (1단계 키워드만 쓰면 '새벽에'·'점심에' 한 토큰만 달라져 나머지 문장이 무시되는 경우가 많음)
+    top_k = max(max(k_list), 24)
+    base = strip_eval_request_meta(base_options)
+    wcols = hybrid_eval_weight_columns(base)
+    rows: list[dict[str, Any]] = []
+    summary_rows: list[dict[str, Any]] = []
+
+    variants = [
+        ("simple", False),
+        ("simple", True),
+        ("advanced", False),
+        ("advanced", True),
+    ]
+
+    for mode, use_llm in variants:
+        opt = dict(base)
+        opt["mode"] = mode
+        opt["use_llm_search"] = use_llm
+        opt["use_full_embedding_search"] = True
+        opt["require_keyword_match"] = False
+        rec_dict = algo.search_by_query_with_options(q, top_k, opt)
+        ranked = sorted(rec_dict.keys(), key=lambda sid: rec_dict[sid], reverse=True)
+        metrics = evaluate(ranked, rel, k_list)
+        rows.append(
+            {
+                **wcols,
+                "variant_mode": mode,
+                "variant_use_llm_search": use_llm,
+                "eval_kind": "search",
+                "search_query": q,
+                "user_id": user_id,
+                "n_relevant": len(rel),
+                **metrics,
+            }
+        )
+        summary_rows.append(
+            {
+                **wcols,
+                "variant_mode": mode,
+                "variant_use_llm_search": use_llm,
+                "n_cases": 1,
+                **metrics,
+            }
+        )
+
+    summary_for_chart: dict[str, float] = {}
+    for s in summary_rows:
+        vmode = s["variant_mode"]
+        vllm = s["variant_use_llm_search"]
+        for k, v in s.items():
+            if isinstance(k, str) and k.startswith(_METRIC_KEY_PREFIXES):
+                summary_for_chart[f"search|{vmode}|llm={vllm}|{k}"] = float(v)
+
+    return {
+        "rows": rows,
+        "summary_rows": summary_rows,
+        "summary": summary_for_chart,
+        "n_cases": len(rows),
+        "notice": "",
+    }
+
+
 def run_offline_eval_variants(
     algo: Any,
     *,
     base_options: dict[str, Any] | None = None,
     k_list: list[int] | None = None,
     max_cases: int = 0,
+    filter_user_id: int | None = None,
+    search_query: str | None = None,
+    search_user_id: int | None = None,
 ) -> dict[str, Any]:
     """
     UI의 '표보기' 용:
@@ -271,9 +424,11 @@ def run_offline_eval_variants(
     """
     if k_list is None:
         k_list = [5, 10, 20]
-    
-    base = dict(base_options or {})
+
+    base = strip_eval_request_meta(base_options or {})
     wcols = hybrid_eval_weight_columns(base)
+
+    _ecounts = eval_recommend_case_counts(max_cases, filter_user_id)
     rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
 
@@ -294,6 +449,7 @@ def run_offline_eval_variants(
             base_options=opt,
             k_list=k_list,
             max_cases=max_cases,
+            filter_user_id=filter_user_id,
         )
 
         for r in result["rows"]:
@@ -332,11 +488,33 @@ def run_offline_eval_variants(
             reverse=True,
         )
 
-    return {
+    out: dict[str, Any] = {
         "rows": rows,
         "summary_rows": summary_rows,
         "summary": summary_for_chart,
+        **_ecounts,
     }
+
+    sq = (search_query or "").strip()
+    if sq and search_user_id is not None:
+        se = run_search_query_eval_variants(
+            algo,
+            sq,
+            user_id=search_user_id,
+            base_options=base,
+            k_list=k_list,
+        )
+        out["search_rows"] = se["rows"]
+        out["search_summary_rows"] = se["summary_rows"]
+        out["search_summary"] = se["summary"]
+        out["search_eval_notice"] = se.get("notice") or ""
+    else:
+        out["search_rows"] = []
+        out["search_summary_rows"] = []
+        out["search_summary"] = {}
+        out["search_eval_notice"] = ""
+
+    return out
 
 
 

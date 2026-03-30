@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime, timedelta, timezone
 import jwt
 from data.database import (
@@ -136,8 +136,30 @@ class HybridOptions(BaseModel):
     use_llm_search: bool = False
 
 class EvalRunRequest(BaseModel):
+    """options 안에 넣어도 되고, eval_* 는 본문 최상위로내도 됨(누락 방지)."""
+
+    model_config = ConfigDict(extra="allow")
+
     algorithm: str
     options: dict[str, Any] | None = None
+    eval_only_current_user: bool | None = None
+    search_eval_query: str | None = None
+
+
+def _option_bool(v: Any) -> bool:
+    """쿼리스트링/구 클라이언트 대비: eval_only_current_user 등을 안전하게 bool 로."""
+    if v is True or v == 1:
+        return True
+    if v is False or v == 0:
+        return False
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in ("true", "1", "yes", "on"):
+            return True
+        if s in ("false", "0", "no", "off", ""):
+            return False
+    return bool(v)
+
 
 def _create_token(username: str) -> str:
     exp = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
@@ -169,7 +191,8 @@ def signup(req: AuthRequest):
     if not create_user(username, req.password):
         raise HTTPException(status_code=409, detail="이미 존재하는 아이디입니다")
     token = _create_token(username)
-    return {"status": "ok", "username": username, "access_token": token}
+    uid = get_or_create_user(username)
+    return {"status": "ok", "username": username, "access_token": token, "user_id": uid}
 
 
 @app.post("/api/login")
@@ -178,13 +201,15 @@ def login(req: AuthRequest):
     if not authenticate_user(username, req.password):
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 올바르지 않습니다")
     token = _create_token(username)
-    return {"status": "ok", "username": username, "access_token": token}
+    uid = get_or_create_user(username)
+    return {"status": "ok", "username": username, "access_token": token, "user_id": uid}
 
 
 @app.get("/api/me")
 def me(authorization: str | None = Header(default=None)):
     username = _get_current_username(authorization)
-    return {"username": username}
+    uid = get_or_create_user(username)
+    return {"username": username, "user_id": uid}
 
 
 @app.get("/api/likes")
@@ -295,14 +320,21 @@ def list_algorithms():
     return body
 
 @app.post("/api/eval/run")
-def run_eval(req: EvalRunRequest):
+def run_eval(
+    req: EvalRunRequest,
+    authorization: str | None = Header(default=None),
+):
     if req.algorithm not in recommenders:
         raise HTTPException(status_code=400, detail=f"알고리즘 '{req.algorithm}' 없음")
     
     algo = recommenders[req.algorithm]
 
-    # 요청 옵션 파싱
+    # 요청 옵션 파싱 (최상위 eval_* 가 있으면 options 위에 덮어씀)
     opts = dict(req.options or {})
+    if req.eval_only_current_user is not None:
+        opts["eval_only_current_user"] = req.eval_only_current_user
+    if req.search_eval_query is not None:
+        opts["search_eval_query"] = str(req.search_eval_query).strip()
     k_list = opts.get("k_list", [5, 10, 20])
     if not isinstance(k_list, list) or not k_list:
         k_list = [5, 10, 20]
@@ -315,11 +347,28 @@ def run_eval(req: EvalRunRequest):
     max_cases = int(opts.get("max_cases", 0))
     run_variants = bool(opts.get("run_variants", True))
 
+    only_me = _option_bool(opts.get("eval_only_current_user"))
+    sq_raw = opts.get("search_eval_query")
+    search_q = sq_raw.strip() if isinstance(sq_raw, str) else ""
+    need_auth = only_me or bool(search_q)
+    current_uid: int | None = None
+    if need_auth:
+        if not authorization:
+            raise HTTPException(
+                status_code=401,
+                detail="현재 계정만 평가 또는 검색어 평가는 로그인이 필요합니다.",
+            )
+        current_uid = get_or_create_user(_get_current_username(authorization))
+    filter_uid: int | None = current_uid if only_me else None
+    search_uid: int | None = current_uid if search_q else None
+
     try:
         from evaluation.offline_eval import (
+            eval_recommend_case_counts,
             hybrid_eval_weight_columns,
             run_offline_eval_for_algorithm,
             run_offline_eval_variants,
+            run_search_query_eval_variants,
         )
 
         if run_variants:
@@ -328,6 +377,9 @@ def run_eval(req: EvalRunRequest):
                 base_options=opts,
                 k_list=k_list,
                 max_cases=max_cases,
+                filter_user_id=filter_uid,
+                search_query=search_q or None,
+                search_user_id=search_uid,
             )
             body: dict[str, Any] = {
                 "algorithm": req.algorithm,
@@ -337,6 +389,16 @@ def run_eval(req: EvalRunRequest):
                 "rows": result["rows"],
                 "summary_rows": result["summary_rows"],
                 "summary": result["summary"],
+                "search_rows": result.get("search_rows", []),
+                "search_summary_rows": result.get("search_summary_rows", []),
+                "search_summary": result.get("search_summary", {}),
+                "search_eval_notice": result.get("search_eval_notice", ""),
+                "eval_only_current_user": only_me,
+                "eval_filter_user_id": filter_uid,
+                "eval_recommend_pool_all_users": result.get("eval_recommend_pool_all_users"),
+                "eval_recommend_pool_filtered_user": result.get("eval_recommend_pool_filtered_user"),
+                "eval_recommend_cases_evaluated": result.get("eval_recommend_cases_evaluated"),
+                "search_eval_applied": bool(result.get("search_rows")),
             }
             if req.algorithm.startswith("hybrid"):
                 body["hybrid_sidebar_snapshot"] = {
@@ -353,6 +415,7 @@ def run_eval(req: EvalRunRequest):
             base_options=opts,
             k_list=k_list,
             max_cases=max_cases,
+            filter_user_id=filter_uid,
         )
         wcols = hybrid_eval_weight_columns(opts)
         if wcols:
@@ -375,6 +438,7 @@ def run_eval(req: EvalRunRequest):
                 "n_cases": single["n_cases"],
                 **single["summary"],
             }
+        _ec = eval_recommend_case_counts(max_cases, filter_uid)
         single_body: dict[str, Any] = {
             "algorithm": req.algorithm,
             "mode": "single",
@@ -383,7 +447,29 @@ def run_eval(req: EvalRunRequest):
             "rows": single["rows"],
             "summary_rows": [summary_row],
             "summary": single["summary"],
+            "eval_only_current_user": only_me,
+            "eval_filter_user_id": filter_uid,
+            **_ec,
+            "search_eval_applied": False,
         }
+        if search_q and search_uid is not None:
+            se = run_search_query_eval_variants(
+                algo,
+                search_q,
+                user_id=search_uid,
+                base_options=opts,
+                k_list=k_list,
+            )
+            single_body["search_rows"] = se["rows"]
+            single_body["search_summary_rows"] = se["summary_rows"]
+            single_body["search_summary"] = se["summary"]
+            single_body["search_eval_notice"] = se.get("notice", "")
+            single_body["search_eval_applied"] = bool(se.get("rows"))
+        else:
+            single_body["search_rows"] = []
+            single_body["search_summary_rows"] = []
+            single_body["search_summary"] = {}
+            single_body["search_eval_notice"] = ""
         if req.algorithm.startswith("hybrid"):
             single_body["hybrid_sidebar_snapshot"] = {
                 "mode": opts.get("mode"),

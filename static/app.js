@@ -135,7 +135,7 @@ async function bootstrapAuth() {
     refreshAuthUI();
     return;
   }
-  authUser = { username: me.username };
+  authUser = { username: me.username, user_id: me.user_id };
   showAuthGate(false);
   refreshAuthUI();
   await loadLikedFromServer();
@@ -164,7 +164,7 @@ async function onSignup() {
   if (!username || !password) return alert("아이디/비밀번호를 입력해주세요.");
   const res = await apiFetch("/api/signup", "POST", { username, password });
   if (!res) return alert("회원가입 실패: 중복 아이디 또는 형식 오류");
-  authUser = { username: res.username };
+  authUser = { username: res.username, user_id: res.user_id };
   authToken = res.access_token;
   localStorage.setItem("auth_token", authToken);
   showAuthGate(false);
@@ -179,7 +179,7 @@ async function onLogin() {
   if (!username || !password) return alert("아이디/비밀번호를 입력해주세요.");
   const res = await apiFetch("/api/login", "POST", { username, password });
   if (!res) return alert("로그인 실패: 아이디/비밀번호를 확인해주세요.");
-  authUser = { username: res.username };
+  authUser = { username: res.username, user_id: res.user_id };
   authToken = res.access_token;
   localStorage.setItem("auth_token", authToken);
   showAuthGate(false);
@@ -780,10 +780,24 @@ function onModalEscape(ev) {
 function openEvalModal() {
   document.getElementById("eval-modal").classList.remove("hidden");
   document.body.style.overflow = "hidden";
+  const cb = document.getElementById("eval-only-current-user");
+  if (cb) {
+    cb.disabled = !authUser;
+    cb.checked = !!authUser;
+  }
+  const eq = document.getElementById("eval-search-query");
+  const si = document.getElementById("search-input");
+  if (eq && si) eq.value = si.value || "";
 }
 function closeEvalModal() {
   document.getElementById("eval-modal").classList.add("hidden");
   renderEvalRunInfo(null);
+  const sec = document.getElementById("eval-search-section");
+  if (sec) sec.setAttribute("hidden", "");
+  if (evalSearchChart) {
+    evalSearchChart.destroy();
+    evalSearchChart = null;
+  }
   if (!document.getElementById("hybrid-modal")?.classList.contains("hidden")) return;
   document.body.style.overflow = "";
 }
@@ -795,6 +809,8 @@ const EVAL_COL_LABELS = {
   variant_mode: "조합·공동출현",
   variant_use_llm_search: "조합·LLM검색",
   variant: "평가방식",
+  eval_kind: "평가종류",
+  search_query: "검색문장",
   n_cases: "케이스수",
   user_id: "user_id",
   query_song_id: "쿼리곡ID",
@@ -868,25 +884,111 @@ function renderEvalRunInfo(res) {
     );
   }
 
+  if (res.eval_only_current_user === true) {
+    blocks.push(
+      `<p class="eval-run-info__line">곡 기반 평가 범위: <strong>현재 로그인 계정만</strong> (user_id=${escapeHtmlEval(String(res.eval_filter_user_id ?? ""))})</p>`
+    );
+  } else if (res.eval_only_current_user === false) {
+    blocks.push(
+      `<p class="eval-run-info__line">곡 기반 평가 범위: <strong>DB 전체 유저</strong> 케이스</p>`
+    );
+  }
+
+  const usedQ = res.options_used && res.options_used.search_eval_query;
+  const usedStr = typeof usedQ === "string" ? usedQ.trim() : "";
+  if (usedStr) {
+    blocks.push(
+      `<p class="eval-run-info__line">검색어 평가에 서버로 보낸 문장: <strong>${escapeHtmlEval(usedStr)}</strong></p>`
+    );
+    if (res.search_eval_applied) {
+      blocks.push(
+        `<p class="eval-run-info__note">위 문장으로 검색 평가를 돌렸습니다. 검색 평가는 UI 기본(키워드 1단계)과 달리 <strong>문장 전체 임베딩</strong>을 써서 자연어 차이가 순위에 잘 드러나게 했습니다. 아래 <strong>검색창 문자열 vs 내 좋아요</strong> 표·차트를 보세요.</p>`
+      );
+    } else {
+      blocks.push(
+        `<p class="eval-run-info__note">문장은 보냈지만 표가 비면 좋아요 부족·알고리즘 미지원 등입니다. 안내 문구를 아래 검색 블록에서 확인하세요.</p>`
+      );
+    }
+  } else {
+    blocks.push(
+      `<p class="eval-run-info__line">검색어 평가: <strong>요청 안 함</strong> (모달 입력·상단 검색창 모두 비었음)</p>`
+    );
+  }
+
+  const pa = res.eval_recommend_pool_all_users;
+  const pf = res.eval_recommend_pool_filtered_user;
+  const ne = res.eval_recommend_cases_evaluated;
+  if (pa != null && ne != null) {
+    const samePool = pf != null && Number(pa) === Number(pf) && res.eval_only_current_user;
+    blocks.push(
+      `<p class="eval-run-info__line">곡 기반 케이스 — DB 전체 풀 <strong>${escapeHtmlEval(String(pa))}</strong>건 · 필터 적용 후 대상 풀 <strong>${escapeHtmlEval(String(pf ?? "—"))}</strong>건 · 이번에 실제 계산 <strong>${escapeHtmlEval(String(ne))}</strong>건${
+        samePool ? " <span class=\"eval-run-info__muted\">(전체와 내 계정 풀이 같아 지표가 동일할 수 있음)</span>" : ""
+      }</p>`
+    );
+  }
+
   el.innerHTML = blocks.join("");
   el.removeAttribute("hidden");
 }
 
 async function runEvaluation() {
   const algo = currentAlgo();
+  const opts = isHybridAlgo(algo) ? { ...hybridOptions } : {};
+  // 상단 검색창이 평가 질의의 기준(모달 입력은 검색창이 비었을 때만)
+  const si = document.getElementById("search-input")?.value?.trim() || "";
+  const eq = document.getElementById("eval-search-query")?.value?.trim() || "";
+  const searchEvalQuery = si || eq;
+  opts.search_eval_query = searchEvalQuery;
+  if (searchEvalQuery && !authUser) {
+    return alert("검색어 평가는 로그인 후 사용할 수 있습니다. (내 좋아요를 정답으로 씁니다)");
+  }
+  const cb = document.getElementById("eval-only-current-user");
+  const onlyMe = !!(authUser && cb && !cb.disabled && cb.checked);
+  opts.eval_only_current_user = onlyMe;
   const body = {
     algorithm: algo,
-    options: isHybridAlgo(algo) ? hybridOptions : {},
+    options: opts,
+    eval_only_current_user: onlyMe,
+    search_eval_query: searchEvalQuery,
   };
-  const res = await apiFetch("/api/eval/run", "POST", body);
-  if (!res) return alert("평가 실패");
+  let res;
+  try {
+    const fetchOpts = {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    };
+    if (authToken) fetchOpts.headers.Authorization = `Bearer ${authToken}`;
+    const r = await fetch(API + "/api/eval/run", fetchOpts);
+    if (r.status === 401) {
+      let msg = "로그인이 필요합니다. (현재 계정만 평가·검색어 평가)";
+      try {
+        const j = await r.json();
+        if (typeof j.detail === "string") msg = j.detail;
+      } catch (_) {}
+      alert(msg);
+      return;
+    }
+    if (!r.ok) {
+      return alert("평가 실패 (서버 오류 또는 알고리즘 없음)");
+    }
+    res = await r.json();
+  } catch (e) {
+    console.error(e);
+    return alert("평가 실패 (네트워크 오류)");
+  }
 
   renderEvalRunInfo(res);
   renderEvalTable(res.rows || [], res.summary_rows || []);
   renderEvalChart(res.summary || {});
+  renderEvalSearchSection(res);
 }
 
 function _fmtEvalCell(v, col) {
+  if (col === "eval_kind") {
+    if (v === "recommend") return "곡기반";
+    if (v === "search") return "검색어";
+  }
   if (col === "variant_use_llm_search") {
     if (v === true || v === "true") return "반영(on)";
     if (v === false || v === "false") return "미반영(off)";
@@ -911,7 +1013,7 @@ function renderEvalTable(rows, summaryRows) {
           `<tr>${cols.map((c) => `<td>${escapeHtmlEval(_fmtEvalCell(r[c], c))}</td>`).join("")}</tr>`
       )
       .join("");
-    wrap.innerHTML = `<p class="eval-subcap">케이스별 상세 · 앞쪽 열은 이번 실행에 쓴 가중치·임계값·조합(모드·LLM)</p><table class="eval-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+    wrap.innerHTML = `<p class="eval-subcap">곡 기반 추천 · 케이스별 상세 · 앞쪽 열은 가중치·임계값·조합(모드·LLM)</p><table class="eval-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
     return;
   }
 
@@ -977,6 +1079,106 @@ const evalChartLayout = {
 };
 
 let evalChart;
+let evalSearchChart = null;
+
+function renderEvalSearchSection(res) {
+  const sec = document.getElementById("eval-search-section");
+  const tw = document.getElementById("eval-search-table-wrap");
+  if (!sec || !tw) return;
+
+  sec.removeAttribute("hidden");
+
+  const rawQ = res.options_used && res.options_used.search_eval_query;
+  const hasQuery = typeof rawQ === "string" && rawQ.trim().length > 0;
+  const srows = res.search_rows || [];
+  const notice = res.search_eval_notice || "";
+  const ssum = res.search_summary || {};
+
+  if (!hasQuery) {
+    tw.innerHTML =
+      "<p class=\"eval-empty eval-search-placeholder\">검색어 평가는 실행하지 않았습니다. 모달 하단 입력란에 문장을 적거나 상단 검색창을 채운 뒤 다시 실행하면, 그 문자열로 네 조합 검색이 돌아가고 이 표에 붙습니다.</p>";
+    renderEvalSearchChart({});
+    return;
+  }
+
+  if (srows.length) {
+    const cols = Object.keys(srows[0]);
+    const head = `<tr>${cols.map((c) => `<th>${escapeHtmlEval(evalColTitle(c))}</th>`).join("")}</tr>`;
+    const body = srows
+      .map(
+        (r) =>
+          `<tr>${cols.map((c) => `<td>${escapeHtmlEval(_fmtEvalCell(r[c], c))}</td>`).join("")}</tr>`
+      )
+      .join("");
+    const cap = `<p class="eval-subcap">검색어 「${escapeHtmlEval(rawQ.trim())}」· 네 조합(Simple/Advanced × LLM) · 정답=내 좋아요 전체</p>`;
+    tw.innerHTML = `${cap}<table class="eval-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+    if (notice) {
+      tw.insertAdjacentHTML("afterbegin", `<p class="eval-run-info__note">${escapeHtmlEval(notice)}</p>`);
+    }
+  } else {
+    tw.innerHTML = `<p class="eval-empty">${escapeHtmlEval(notice || "검색 결과는 있으나 표 행이 없습니다.")}</p>`;
+  }
+
+  renderEvalSearchChart(ssum);
+}
+
+function renderEvalSearchChart(summary) {
+  const ctx = document.getElementById("eval-chart-search");
+  if (!ctx || typeof Chart === "undefined") return;
+  if (evalSearchChart) {
+    evalSearchChart.destroy();
+    evalSearchChart = null;
+  }
+  const labels = Object.keys(summary || {});
+  const data = Object.values(summary || {});
+  if (!labels.length) {
+    evalSearchChart = new Chart(ctx, {
+      type: "bar",
+      data: { labels: ["(검색 평가 없음)"], datasets: [{ label: "지표", data: [0], backgroundColor: "#333" }] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: evalChartLayout,
+        scales: evalChartScales,
+      },
+    });
+    return;
+  }
+  evalSearchChart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "검색 지표",
+          data,
+          backgroundColor: "rgba(100, 149, 237, 0.5)",
+          borderColor: "rgba(100, 149, 237, 0.9)",
+          borderWidth: 1,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: evalChartLayout,
+      scales: evalChartScales,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label(ctx) {
+              const raw = ctx.raw;
+              const n = typeof raw === "number" ? raw : parseFloat(raw);
+              if (!Number.isFinite(n)) return String(raw);
+              return ` ${n.toFixed(4)}`;
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
 function renderEvalChart(summary) {
   const ctx = document.getElementById("eval-chart");
   if (evalChart) {
