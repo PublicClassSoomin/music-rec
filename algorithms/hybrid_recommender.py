@@ -14,7 +14,12 @@
 
 from __future__ import annotations
 
+import re
+
+import pandas as pd
+
 from algorithms.base import BaseRecommender
+from data.faiss_index import FEATURE_COLS
 from data.database import get_song_interaction_stats, get_user_liked_song_ids
 
 
@@ -42,8 +47,11 @@ class HybridRecommender(BaseRecommender):
         """
         super().__init__("hybrid")
         self._index = faiss_index
-        self._data = None
+        self._data: pd.DataFrame | None = None
         self._song_ids: set[str] = set()
+        self._searchable_data: pd.DataFrame | None = None
+        self._feature_medians: dict[str, float] = {}
+        self._feature_ranges: dict[str, float] = {}
 
         self.content_weight = content_weight
         self.user_weight = user_weight
@@ -62,6 +70,7 @@ class HybridRecommender(BaseRecommender):
         """
         self._data = data.copy()
         self._song_ids = set(self._data["song_id"].dropna().astype(str).tolist())
+        self._prepare_search_cache()
         self.is_fitted = True
 
     def recommend(self, song_id: str, top_k: int = 10) -> dict[str, float]:
@@ -170,17 +179,7 @@ class HybridRecommender(BaseRecommender):
 
     def search_by_query(self, query: str, top_k: int = 10) -> dict[str, float]:
         """
-        자연어 또는 키워드 입력을 제목/가수 메타데이터 기준으로 간단히 검색하는 함수.
-
-        현재 hybrid 추천기는 오디오 기반 추천이 중심이지만,
-        프론트의 검색 기능이 유지되도록 제목/가수 문자열 포함 여부를 이용한
-        가벼운 검색 기능을 함께 제공합니다.
-
-        검색 흐름:
-          1. 질의를 소문자 토큰으로 분해
-          2. 각 곡의 제목/가수 문자열과 비교
-          3. 일치한 토큰 비율을 점수로 계산
-          4. 상위 top_k 결과 반환
+        자연어 질의를 간단한 의도 해석으로 바꿔 메타데이터+오디오 특성 검색을 수행한다.
 
         Args:
             query: 사용자가 입력한 검색 문장 또는 키워드
@@ -190,29 +189,212 @@ class HybridRecommender(BaseRecommender):
             {song_id: score} 형태의 검색 결과
         """
         self._check_fitted()
-        if self._data is None or self._data.empty:
+        if self._searchable_data is None or self._searchable_data.empty:
             return {}
 
         q = (query or "").lower().strip()
         if not q:
             return {}
 
-        tokens = [t for t in q.split() if len(t) >= 2]
-        if not tokens:
-            tokens = [q]
+        tokens = self._tokenize(q)
+        intent = self._infer_query_intent(q)
+        has_audio_intent = bool(intent["feature_targets"])
 
         scores: dict[str, float] = {}
-        for _, row in self._data.iterrows():
-            sid = row.get("song_id")
-            if not sid:
-                continue
-            text = f"{row.get('title') or ''} {row.get('artist') or ''}".lower()
-            hit = sum(1 for t in tokens if t in text)
-            if hit > 0:
-                scores[str(sid)] = float(hit) / len(tokens)
+        for _, row in self._searchable_data.iterrows():
+            sid = row["song_id"]
+
+            text_score = self._text_match_score(row, q, tokens)
+            audio_score = self._audio_intent_score(row, intent["feature_targets"])
+            keyword_bonus = self._keyword_bonus_score(row, intent["keyword_weights"])
+
+            final_score = text_score
+            if has_audio_intent:
+                final_score += audio_score * 0.75
+            if intent["keyword_weights"]:
+                final_score += keyword_bonus * 0.25
+
+            if final_score > 0:
+                scores[str(sid)] = float(final_score)
 
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
         return dict(ranked)
+
+    def _prepare_search_cache(self) -> None:
+        """자연어 검색용 메타/오디오 캐시를 준비한다."""
+        if self._data is None or self._data.empty:
+            self._searchable_data = None
+            self._feature_medians = {}
+            self._feature_ranges = {}
+            return
+
+        df = self._data.copy()
+        df["song_id"] = df["song_id"].astype(str)
+        df["title"] = df["title"].fillna("").astype(str)
+        df["artist"] = df["artist"].fillna("").astype(str)
+        df["genre"] = df["genre"].fillna("").astype(str)
+        df["search_text"] = (df["title"] + " " + df["artist"] + " " + df["genre"]).str.lower()
+        self._searchable_data = df
+
+        for col in FEATURE_COLS:
+            series = pd.to_numeric(df[col], errors="coerce")
+            median = float(series.median()) if not series.dropna().empty else 0.0
+            col_min = float(series.min()) if not series.dropna().empty else median
+            col_max = float(series.max()) if not series.dropna().empty else median
+            self._feature_medians[col] = median
+            self._feature_ranges[col] = max(col_max - col_min, 1e-6)
+
+    def _tokenize(self, text: str) -> list[str]:
+        tokens = re.findall(r"[0-9a-z가-힣]+", (text or "").lower())
+        return [token for token in tokens if len(token) >= 2]
+
+    def _infer_query_intent(self, query: str) -> dict[str, dict[str, float]]:
+        """
+        질의의 분위기 표현을 오디오 특성 목표값으로 변환한다.
+
+        반환:
+            {
+                "feature_targets": {"bpm": ..., "energy": ...},
+                "keyword_weights": {"rain": 1.0, ...},
+            }
+        """
+        feature_votes: dict[str, list[float]] = {}
+        keyword_weights: dict[str, float] = {}
+
+        def vote(feature: str, target: str):
+            value = self._feature_target_value(feature, target)
+            feature_votes.setdefault(feature, []).append(value)
+
+        def keyword(name: str, weight: float = 1.0):
+            prev = keyword_weights.get(name, 0.0)
+            keyword_weights[name] = max(prev, weight)
+
+        rules = [
+            (("잔잔", "차분", "조용", "편안", "힐링", "relax", "calm", "lofi", "lo-fi"), [
+                ("bpm", "low"), ("energy", "low"), ("spectral_centroid", "low"), ("zcr", "low"),
+            ]),
+            (("신나", "흥겨", "업템포", "파티", "dance", "party"), [
+                ("bpm", "high"), ("energy", "high"), ("spectral_centroid", "high"),
+            ]),
+            (("운동", "헬스", "러닝", "run", "workout", "gym"), [
+                ("bpm", "high"), ("energy", "high"), ("zcr", "high"),
+            ]),
+            (("새벽", "밤", "감성", "emo", "emotional"), [
+                ("bpm", "low"), ("energy", "low"), ("spectral_centroid", "low"),
+            ]),
+            (("드라이브", "drive"), [
+                ("bpm", "mid_high"), ("energy", "mid_high"), ("spectral_centroid", "mid_high"),
+            ]),
+            (("청량", "시원", "밝은", "bright", "fresh"), [
+                ("energy", "mid_high"), ("spectral_centroid", "high"), ("zcr", "mid_high"),
+            ]),
+            (("강한", "센", "강렬", "intense", "hard"), [
+                ("energy", "high"), ("spectral_centroid", "high"), ("zcr", "high"),
+            ]),
+            (("부드러운", "포근", "따뜻", "soft", "warm"), [
+                ("energy", "low"), ("spectral_centroid", "low"),
+            ]),
+            (("비", "rain", "rainy"), [
+                ("bpm", "low"), ("energy", "low"), ("spectral_centroid", "low"),
+            ]),
+        ]
+
+        for phrases, targets in rules:
+            if any(phrase in query for phrase in phrases):
+                for feature, target in targets:
+                    vote(feature, target)
+
+        if "비 오는 날" in query or "rainy day" in query:
+            keyword("rain", 1.0)
+            vote("bpm", "low")
+            vote("energy", "low")
+            vote("spectral_centroid", "low")
+
+        if "사랑" in query or "love" in query:
+            keyword("love", 1.0)
+        if "이별" in query or "breakup" in query:
+            keyword("breakup", 1.0)
+            vote("energy", "low")
+
+        feature_targets = {
+            feature: sum(values) / len(values)
+            for feature, values in feature_votes.items()
+            if values
+        }
+        return {
+            "feature_targets": feature_targets,
+            "keyword_weights": keyword_weights,
+        }
+
+    def _feature_target_value(self, feature: str, level: str) -> float:
+        median = self._feature_medians.get(feature, 0.0)
+        span = self._feature_ranges.get(feature, 1.0)
+
+        offsets = {
+            "low": -0.30,
+            "mid_low": -0.15,
+            "mid": 0.0,
+            "mid_high": 0.15,
+            "high": 0.30,
+        }
+        return median + span * offsets.get(level, 0.0)
+
+    def _text_match_score(self, row, raw_query: str, tokens: list[str]) -> float:
+        text = row["search_text"]
+        if not tokens:
+            return 0.0
+
+        token_hits = sum(1 for token in tokens if token in text)
+        score = float(token_hits) / len(tokens)
+
+        title = row["title"].lower()
+        artist = row["artist"].lower()
+        if raw_query and raw_query in title:
+            score += 0.8
+        elif raw_query and raw_query in artist:
+            score += 0.6
+
+        return score
+
+    def _audio_intent_score(self, row, feature_targets: dict[str, float]) -> float:
+        if not feature_targets:
+            return 0.0
+
+        scores = []
+        for feature, target in feature_targets.items():
+            value = row.get(feature)
+            if pd.isna(value):
+                continue
+            span = self._feature_ranges.get(feature, 1.0)
+            distance = abs(float(value) - target) / span
+            scores.append(max(0.0, 1.0 - distance))
+
+        if not scores:
+            return 0.0
+        return sum(scores) / len(scores)
+
+    def _keyword_bonus_score(self, row, keyword_weights: dict[str, float]) -> float:
+        if not keyword_weights:
+            return 0.0
+
+        text = row["search_text"]
+        aliases = {
+            "rain": ("rain", "비"),
+            "love": ("love", "사랑"),
+            "breakup": ("breakup", "이별", "헤어"),
+        }
+
+        total = 0.0
+        matched = 0
+        for key, weight in keyword_weights.items():
+            phrases = aliases.get(key, (key,))
+            if any(phrase in text for phrase in phrases):
+                total += weight
+                matched += 1
+
+        if matched == 0:
+            return 0.0
+        return total / matched
 
     def _build_candidates_from_song(self, song_id: str, limit: int = 30) -> set[str]:
         """

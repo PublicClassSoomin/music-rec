@@ -245,7 +245,7 @@ def recommend_by_user(req: UserRecommendRequest, authorization: str | None = Hea
 
 @app.post("/api/search")
 def search_by_query(req: SearchRequest):
-    """자연어 검색 (BERT / LangChain 계열에서 구현)"""
+    """메타데이터 + 오디오 특성 기반 자연어 검색."""
     _ensure_app_ready()
     if req.algorithm not in recommenders:
         raise HTTPException(status_code=400, detail="알고리즘 없음")

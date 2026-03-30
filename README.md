@@ -138,7 +138,7 @@ SELECT * FROM songs LIMIT 10;
 - 참고 구현: `algorithms/faiss_cbf.py` (`FaissContentRecommender`)
 - `fit(...)`, `recommend(...)` 인터페이스 준수
 - 유저 맞춤이 필요하면 `recommend_for_user(user_id, top_k)` 구현
-- 자연어 검색이 필요하면 `search_by_query(query, top_k)` 구현
+- 자연어 검색은 `search_by_query(query, top_k)`에서 처리하며, 현재 `hybrid`는 제목/가수 매칭과 오디오 특성(BPM, energy 등) 기반 분위기 해석을 함께 사용
 - 반환 포맷은 `{song_id: score}` 딕셔너리 권장
 - `api/main.py`의 `startup()`에서 인스턴스 생성·학습·`recommenders["키"]` 등록
 
