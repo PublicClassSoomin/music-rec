@@ -45,11 +45,13 @@ async def startup():
         recommenders["faiss_cbf"].fit(song_df)
         print("[API] 샘플 알고리즘 등록: faiss_cbf")
 
-    # ── 팀원 추가 등록 예시 (같은 startup() 안에서 faiss_index 사용) ──
-    # from algorithms.my_algo import MyRecommender
-    # recommenders["my_algo"] = MyRecommender(faiss_index)
-    # recommenders["my_algo"].fit(song_df)
-    # ────────────────────────────────────────────────────────────────
+    # ── CBF Algorithm (Ryan / KAN-10) ────────────────────────────────
+    if faiss_index is not None and getattr(faiss_index, "is_built", False):
+        from algorithms.cbf_recommender import CBFRecommender
+        recommenders["cbf"] = CBFRecommender(faiss_index)
+        recommenders["cbf"].fit(song_df)
+        print("[API] algorithm registered: cbf")
+    # ─────────────────────────────────────────────────────────────────
 
 
 # ── 웹 UI ─────────────────────────────────────────────────
