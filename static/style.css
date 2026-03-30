@@ -1302,6 +1302,20 @@ body {
   position: static;
 }
 
+.eval-banner {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.eval-banner--warn {
+  background: rgba(255, 193, 7, 0.12);
+  border: 1px solid rgba(255, 193, 7, 0.35);
+  color: var(--text);
+}
+
 .eval-chart-caption {
   margin: 12px 0 6px;
   font-size: 0.85rem;

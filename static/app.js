@@ -792,6 +792,8 @@ function openEvalModal() {
 function closeEvalModal() {
   document.getElementById("eval-modal").classList.add("hidden");
   renderEvalRunInfo(null);
+  const capRec = document.getElementById("eval-chart-caption-recommend");
+  if (capRec) capRec.textContent = "곡 기반 추천 (leave-one-out)";
   const sec = document.getElementById("eval-search-section");
   if (sec) sec.setAttribute("hidden", "");
   if (evalSearchChart) {
@@ -979,7 +981,18 @@ async function runEvaluation() {
   }
 
   renderEvalRunInfo(res);
-  renderEvalTable(res.rows || [], res.summary_rows || []);
+  const capRec = document.getElementById("eval-chart-caption-recommend");
+  if (capRec) {
+    const only = res.eval_only_current_user === true;
+    const ne = res.eval_recommend_cases_evaluated;
+    capRec.textContent =
+      only && ne != null
+        ? `곡 기반 추천 (leave-one-out) · 현재 로그인 계정만 · 이번 실행 ${ne}건`
+        : only
+          ? "곡 기반 추천 (leave-one-out) · 현재 로그인 계정만"
+          : "곡 기반 추천 (leave-one-out) · DB 전체 유저";
+  }
+  renderEvalTable(res.rows || [], res.summary_rows || [], res);
   renderEvalChart(res.summary || {});
   renderEvalSearchSection(res);
 }
@@ -1002,8 +1015,18 @@ function _fmtEvalCell(v, col) {
   return String(v);
 }
 
-function renderEvalTable(rows, summaryRows) {
+function renderEvalTable(rows, summaryRows, res) {
   const wrap = document.getElementById("eval-table-wrap");
+  let zeroBanner = "";
+  if (res && Number(res.eval_recommend_cases_evaluated) === 0) {
+    const only = res.eval_only_current_user === true;
+    zeroBanner = `<p class="eval-banner eval-banner--warn">곡 기반 평가 <strong>케이스 0건</strong>입니다. 아래 표·막대그래프의 Precision/Recall/NDCG는 <strong>계산할 데이터가 없어 0</strong>으로 표시됩니다.${
+      only
+        ? " <strong>현재 로그인 계정</strong>에 좋아요 2곡 이상(또는 재생 20초 이상인 곡 2곡 이상)이 DB에 기록돼 있는지 확인하세요."
+        : " DB에 해당 조건을 만족하는 유저·로그가 있는지 확인하세요."
+    }</p>`;
+  }
+
   if (rows.length) {
     const cols = Object.keys(rows[0]);
     const head = `<tr>${cols.map((c) => `<th>${escapeHtmlEval(evalColTitle(c))}</th>`).join("")}</tr>`;
@@ -1013,7 +1036,7 @@ function renderEvalTable(rows, summaryRows) {
           `<tr>${cols.map((c) => `<td>${escapeHtmlEval(_fmtEvalCell(r[c], c))}</td>`).join("")}</tr>`
       )
       .join("");
-    wrap.innerHTML = `<p class="eval-subcap">곡 기반 추천 · 케이스별 상세 · 앞쪽 열은 가중치·임계값·조합(모드·LLM)</p><table class="eval-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+    wrap.innerHTML = `${zeroBanner}<p class="eval-subcap">곡 기반 추천 · 케이스별 상세 · 앞쪽 열은 가중치·임계값·조합(모드·LLM)</p><table class="eval-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
     return;
   }
 
@@ -1028,13 +1051,14 @@ function renderEvalTable(rows, summaryRows) {
       .join("");
     const zero = summaryRows.every((r) => !r.n_cases);
     const cap = zero
-      ? "<p class=\"eval-empty\">케이스별 표가 없습니다. 좋아요 2곡 이상 또는 재생 20초 이상인 곡 2곡 이상이 있는 유저가 필요합니다. 아래는 설정 변형별 요약입니다(n_cases 확인).</p>"
+      ? "<p class=\"eval-subcap\">요약: 케이스가 없어 지표는 0입니다. 각 행 = 공동출현 모드 × LLM · n_cases 확인</p>"
       : "<p class=\"eval-subcap\">요약: 각 행 = 공동출현 모드 × LLM 옵션 · 앞 열은 설정·오디오%/협업%/임계값</p>";
-    wrap.innerHTML = `${cap}<table class="eval-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+    wrap.innerHTML = `${zeroBanner}${cap}<table class="eval-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
     return;
   }
 
   wrap.innerHTML =
+    zeroBanner +
     "<p class=\"eval-empty\">표 데이터가 없습니다. 알고리즘을 선택한 뒤 다시 실행하거나 서버 오류를 확인하세요.</p>";
 }
 

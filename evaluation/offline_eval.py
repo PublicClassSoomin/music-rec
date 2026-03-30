@@ -16,6 +16,17 @@ from evaluation.metrics import evaluate
 
 _METRIC_KEY_PREFIXES = ("Precision@", "Recall@", "NDCG@")
 
+
+def _zero_metric_summary(k_list: list[int]) -> dict[str, float]:
+    """케이스 0건일 때도 표·차트에 Precision/Recall/NDCG 열·막대가 나오도록 0으로 채움."""
+    out: dict[str, float] = {}
+    for k in k_list:
+        kk = int(k)
+        out[f"Precision@{kk}"] = 0.0
+        out[f"Recall@{kk}"] = 0.0
+        out[f"NDCG@{kk}"] = 0.0
+    return out
+
 # 평가 UI → API options 에만 쓰이고 recommend/search 에는 넘기면 안 되는 키
 _EVAL_REQUEST_META_KEYS = frozenset(
     {
@@ -279,7 +290,11 @@ def run_offline_eval_for_algorithm(
         )
 
     if not rows:
-        return {"rows": [], "summary": {}, "n_cases": 0}
+        return {
+            "rows": [],
+            "summary": _zero_metric_summary(cfg.k_list),
+            "n_cases": 0,
+        }
 
     # 지표 컬럼 추출 (Precision@K, Recall@K, NDCG@K)
     metric_cols = _metric_column_keys(rows[0])
