@@ -143,7 +143,6 @@ class EvalRunRequest(BaseModel):
     algorithm: str
     options: dict[str, Any] | None = None
     eval_only_current_user: bool | None = None
-    search_eval_query: str | None = None
 
 
 def _option_bool(v: Any) -> bool:
@@ -333,8 +332,6 @@ def run_eval(
     opts = dict(req.options or {})
     if req.eval_only_current_user is not None:
         opts["eval_only_current_user"] = req.eval_only_current_user
-    if req.search_eval_query is not None:
-        opts["search_eval_query"] = str(req.search_eval_query).strip()
     k_list = opts.get("k_list", [5, 10, 20])
     if not isinstance(k_list, list) or not k_list:
         k_list = [5, 10, 20]
@@ -348,19 +345,15 @@ def run_eval(
     run_variants = bool(opts.get("run_variants", True))
 
     only_me = _option_bool(opts.get("eval_only_current_user"))
-    sq_raw = opts.get("search_eval_query")
-    search_q = sq_raw.strip() if isinstance(sq_raw, str) else ""
-    need_auth = only_me or bool(search_q)
     current_uid: int | None = None
-    if need_auth:
+    if only_me:
         if not authorization:
             raise HTTPException(
                 status_code=401,
-                detail="현재 계정만 평가 또는 검색어 평가는 로그인이 필요합니다.",
+                detail="현재 계정만 곡 기반 평가는 로그인이 필요합니다.",
             )
         current_uid = get_or_create_user(_get_current_username(authorization))
     filter_uid: int | None = current_uid if only_me else None
-    search_uid: int | None = current_uid if search_q else None
 
     try:
         from evaluation.offline_eval import (
@@ -368,7 +361,6 @@ def run_eval(
             hybrid_eval_weight_columns,
             run_offline_eval_for_algorithm,
             run_offline_eval_variants,
-            run_search_query_eval_variants,
         )
 
         if run_variants:
@@ -378,8 +370,6 @@ def run_eval(
                 k_list=k_list,
                 max_cases=max_cases,
                 filter_user_id=filter_uid,
-                search_query=search_q or None,
-                search_user_id=search_uid,
             )
             body: dict[str, Any] = {
                 "algorithm": req.algorithm,
@@ -389,16 +379,11 @@ def run_eval(
                 "rows": result["rows"],
                 "summary_rows": result["summary_rows"],
                 "summary": result["summary"],
-                "search_rows": result.get("search_rows", []),
-                "search_summary_rows": result.get("search_summary_rows", []),
-                "search_summary": result.get("search_summary", {}),
-                "search_eval_notice": result.get("search_eval_notice", ""),
                 "eval_only_current_user": only_me,
                 "eval_filter_user_id": filter_uid,
                 "eval_recommend_pool_all_users": result.get("eval_recommend_pool_all_users"),
                 "eval_recommend_pool_filtered_user": result.get("eval_recommend_pool_filtered_user"),
                 "eval_recommend_cases_evaluated": result.get("eval_recommend_cases_evaluated"),
-                "search_eval_applied": bool(result.get("search_rows")),
             }
             if req.algorithm.startswith("hybrid"):
                 body["hybrid_sidebar_snapshot"] = {
@@ -450,26 +435,7 @@ def run_eval(
             "eval_only_current_user": only_me,
             "eval_filter_user_id": filter_uid,
             **_ec,
-            "search_eval_applied": False,
         }
-        if search_q and search_uid is not None:
-            se = run_search_query_eval_variants(
-                algo,
-                search_q,
-                user_id=search_uid,
-                base_options=opts,
-                k_list=k_list,
-            )
-            single_body["search_rows"] = se["rows"]
-            single_body["search_summary_rows"] = se["summary_rows"]
-            single_body["search_summary"] = se["summary"]
-            single_body["search_eval_notice"] = se.get("notice", "")
-            single_body["search_eval_applied"] = bool(se.get("rows"))
-        else:
-            single_body["search_rows"] = []
-            single_body["search_summary_rows"] = []
-            single_body["search_summary"] = {}
-            single_body["search_eval_notice"] = ""
         if req.algorithm.startswith("hybrid"):
             single_body["hybrid_sidebar_snapshot"] = {
                 "mode": opts.get("mode"),
